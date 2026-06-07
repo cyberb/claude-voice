@@ -48,7 +48,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -95,6 +97,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var chatJob: Job? = null
     @Volatile private var currentCall: okhttp3.Call? = null
     private var usePiper = false
+    private var piperVoice: String? = null
     private var player: MediaPlayer? = null
     private var busy = false
     private var tokIn = 0
@@ -212,7 +215,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 setStatus("compacted")
             }
         }
-        findViewById<CheckBox>(R.id.piperSwitch).setOnCheckedChangeListener { _, checked -> usePiper = checked }
+        findViewById<CheckBox>(R.id.piperSwitch).setOnCheckedChangeListener { _, checked ->
+            usePiper = checked
+            if (checked) loadPiperVoices() else loadVoices()
+        }
 
         refreshAgents()
     }
@@ -253,6 +259,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 voices.getOrNull(pos)?.let { tts.voice = it }
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
+
+    private fun loadPiperVoices() {
+        ui.launch {
+            val s = httpGet("${base()}/voices") ?: return@launch
+            val arr = try { JSONArray(s) } catch (e: Exception) { return@launch }
+            val names = (0 until arr.length()).map { arr.getString(it) }
+            if (names.isEmpty()) { setStatus("no piper voices installed"); return@launch }
+            piperVoice = names[0]
+            voiceSpinner.adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, names)
+            voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { piperVoice = names.getOrNull(pos) }
+                override fun onNothingSelected(p: AdapterView<*>?) {}
+            }
         }
     }
 
@@ -553,30 +574,67 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun speakPiper(text: String) {
+    private fun speakPiper(fullText: String) {
+        val sentences = splitSentences(fullText)
+        if (sentences.isEmpty()) { setBusy(false); setStatus("ready"); return }
         chatJob = ui.launch {
-            val wav = postBytes("${base()}/tts", JSONObject().put("text", text).toString().toRequestBody(jsonType))
-            if (wav == null || wav.isEmpty()) {
-                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
-                return@launch
+            var next = async(Dispatchers.IO) { ttsBytes(sentences[0]) }
+            for (i in sentences.indices) {
+                val wav = next.await()
+                if (i + 1 < sentences.size) next = async(Dispatchers.IO) { ttsBytes(sentences[i + 1]) }
+                if (wav == null || wav.isEmpty()) {
+                    if (i == 0) { tts.speak(fullText, TextToSpeech.QUEUE_FLUSH, null, "reply"); return@launch }
+                    continue
+                }
+                playWavAwait(wav)
             }
-            playWav(wav)
+            setBusy(false); setStatus("ready")
         }
     }
 
-    private fun playWav(wav: ByteArray) {
+    private fun splitSentences(t: String): List<String> {
+        val parts = Regex("(?<=[.!?。！？])\\s+").split(t.trim())
+        val out = ArrayList<String>()
+        val sb = StringBuilder()
+        for (p in parts) {
+            if (p.isBlank()) continue
+            if (sb.isNotEmpty()) sb.append(" ")
+            sb.append(p.trim())
+            if (sb.length >= 40) { out.add(sb.toString()); sb.clear() }
+        }
+        if (sb.isNotEmpty()) out.add(sb.toString())
+        return out
+    }
+
+    private suspend fun ttsBytes(text: String): ByteArray? {
+        val o = JSONObject().put("text", text)
+        piperVoice?.let { o.put("voice", it) }
+        return postBytes("${base()}/tts", o.toString().toRequestBody(jsonType))
+    }
+
+    private suspend fun playWavAwait(wav: ByteArray) = suspendCancellableCoroutine<Unit> { cont ->
         try {
             val f = File(cacheDir, "reply.wav")
             f.writeBytes(wav)
             stopPlayer()
-            player = MediaPlayer().apply {
-                setDataSource(f.absolutePath)
-                setOnCompletionListener { mp -> mp.release(); if (player === mp) player = null; setBusy(false); setStatus("ready") }
-                prepare()
-                start()
+            val mp = MediaPlayer()
+            player = mp
+            mp.setDataSource(f.absolutePath)
+            mp.setOnCompletionListener {
+                it.release(); if (player === it) player = null
+                if (cont.isActive) cont.resumeWith(Result.success(Unit))
+            }
+            mp.setOnErrorListener { _, _, _ ->
+                if (cont.isActive) cont.resumeWith(Result.success(Unit)); true
+            }
+            mp.prepare()
+            mp.start()
+            cont.invokeOnCancellation {
+                try { mp.stop() } catch (e: Exception) { }
+                mp.release(); if (player === mp) player = null
             }
         } catch (e: Exception) {
-            setStatus("playback failed"); setBusy(false)
+            if (cont.isActive) cont.resumeWith(Result.success(Unit))
         }
     }
 
