@@ -441,8 +441,69 @@ func agentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func runClaude(dir string, cont bool, text string) (string, error) {
+	args := []string{"-p"}
+	if cont {
+		args = append(args, "--continue")
+	}
+	args = append(args, "--permission-mode", perm, text)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+func compactAgent(id int) (string, bool) {
+	mu.Lock()
+	a := agents[id]
+	var dir string
+	if a != nil {
+		dir = a.dir
+	}
+	mu.Unlock()
+	if a == nil {
+		return "", false
+	}
+	summary, err := runClaude(dir, true,
+		"Summarize our conversation so far as concisely as possible — key decisions, "+
+			"important context, and the current state — so a fresh session can continue "+
+			"seamlessly. Output only the summary, no preamble.")
+	if err != nil || summary == "" {
+		return "", false
+	}
+	mu.Lock()
+	if agents[id] != nil {
+		agents[id].started = false
+	}
+	mu.Unlock()
+	runClaude(dir, false, "Context from our earlier conversation (summarized):\n\n"+summary+
+		"\n\nAcknowledge with just: ready.")
+	mu.Lock()
+	if agents[id] != nil {
+		agents[id].started = true
+	}
+	mu.Unlock()
+	return summary, true
+}
+
 func agentDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/agents/")
+	if strings.HasSuffix(rest, "/compact") {
+		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/compact"))
+		if err != nil {
+			writeText(w, 400, "bad id")
+			return
+		}
+		summary, ok := compactAgent(id)
+		if !ok {
+			writeText(w, 500, "compact failed")
+			return
+		}
+		writeJSON(w, 200, map[string]string{"summary": summary})
+		return
+	}
 	if strings.HasSuffix(rest, "/clear") {
 		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/clear"))
 		if err != nil {

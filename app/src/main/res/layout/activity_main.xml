@@ -124,6 +124,12 @@
             android:layout_height="wrap_content"
             android:text="@string/clear_chat" />
 
+        <Button
+            android:id="@+id/compactChat"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/compact_chat" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

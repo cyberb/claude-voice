@@ -160,6 +160,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 drawer.closeDrawers()
             }
         }
+        findViewById<Button>(R.id.compactChat).setOnClickListener {
+            val id = currentAgentId ?: return@setOnClickListener
+            drawer.closeDrawers()
+            tokIn = 0; tokOut = 0
+            setBusy(true)
+            startTimer("compacting…")
+            chatJob = ui.launch {
+                val s = post("${base()}/agents/$id/compact", "{}".toRequestBody(jsonType))
+                stopThinking()
+                setBusy(false)
+                if (s == null) { setStatus("compact failed"); return@launch }
+                appendSpan(colored("— conversation compacted —\n\n", R.color.action_text, italic = true))
+                ctxByAgent.remove(id)
+                tokIn = 0; tokOut = 0
+                updateBottom()
+                setStatus("compacted")
+            }
+        }
         findViewById<CheckBox>(R.id.piperSwitch).setOnCheckedChangeListener { _, checked -> usePiper = checked }
 
         refreshAgents()
@@ -690,7 +708,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun updateStatusLine() {
         val sb = StringBuilder(statusWord)
-        if (statusWord == "thinking…") {
+        if (statusWord == "thinking…" || statusWord == "compacting…") {
             sb.append("  ").append((System.currentTimeMillis() - thinkingStart) / 1000).append("s")
         }
         if (tokIn > 0 || tokOut > 0) {
@@ -701,11 +719,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun fmtTok(n: Int) = if (n >= 1000) "${n / 1000}k" else "$n"
 
+    private fun startTimer(label: String) {
+        thinkingStart = System.currentTimeMillis()
+        setStatus(label)
+        ticker.removeCallbacks(tick); ticker.post(tick)
+    }
+
     private fun startThinking() {
         tokIn = 0; tokOut = 0
-        thinkingStart = System.currentTimeMillis()
-        setStatus("thinking…")
-        ticker.removeCallbacks(tick); ticker.post(tick)
+        startTimer("thinking…")
     }
 
     private fun stopThinking() { ticker.removeCallbacks(tick) }
