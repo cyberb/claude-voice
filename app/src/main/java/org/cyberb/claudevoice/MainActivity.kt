@@ -63,7 +63,7 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-data class Agent(val id: Int, val name: String, val dir: String, val branch: String?, val dirty: Boolean)
+data class Agent(val id: Int, val name: String, val dir: String, val branch: String?, val dirty: Boolean, val exists: Boolean)
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
@@ -88,6 +88,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var branch: TextView
     private lateinit var bridgeUrl: EditText
     private lateinit var agentList: ListView
+    private lateinit var serverStatus: TextView
     private lateinit var voiceSpinner: Spinner
     private lateinit var talk: FloatingActionButton
     private val voices = mutableListOf<Voice>()
@@ -105,6 +106,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val tick = object : Runnable {
         override fun run() { updateStatusLine(); ticker.postDelayed(this, 1000) }
     }
+    private val poller = Handler(Looper.getMainLooper())
+    private val pollRun = object : Runnable {
+        override fun run() { healthCheck(); poller.postDelayed(this, 4000) }
+    }
+    private var agentsSig = ""
 
     private val agents = mutableListOf<Agent>()
     private var currentAgentId: Int? = null
@@ -122,6 +128,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         branch = findViewById(R.id.branch)
         bridgeUrl = findViewById(R.id.bridgeUrl)
         agentList = findViewById(R.id.agentList)
+        serverStatus = findViewById(R.id.serverStatus)
         voiceSpinner = findViewById(R.id.voiceSpinner)
         talk = findViewById(R.id.talk)
 
@@ -188,7 +195,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onResume() {
         super.onResume()
-        refreshAgents()
+        startPolling()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        stopPolling()
     }
 
     override fun onInit(statusCode: Int) {
@@ -262,6 +274,31 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         updateBottom()
     }
 
+    private fun startPolling() { poller.removeCallbacks(pollRun); poller.post(pollRun) }
+    private fun stopPolling() { poller.removeCallbacks(pollRun) }
+
+    private fun setServerUp(up: Boolean) {
+        serverStatus.text = if (up) "● bridge" else "● bridge down"
+        serverStatus.setTextColor(ContextCompat.getColor(this, if (up) R.color.dot_ok else R.color.dot_down))
+    }
+
+    private fun healthCheck() = ui.launch {
+        val ok = httpGet("${base()}/health") == "ok"
+        setServerUp(ok)
+        if (!ok) return@launch
+        val s = httpGet("${base()}/agents") ?: return@launch
+        val list = parseAgents(s)
+        val sig = list.joinToString("|") { "${it.id}:${it.branch}:${it.dirty}:${it.exists}" }
+        if (sig != agentsSig) {
+            agentsSig = sig
+            setAgents(list)
+            if (currentAgentId == null || agents.none { it.id == currentAgentId }) {
+                currentAgentId = agents.firstOrNull()?.id
+            }
+            updateBottom()
+        }
+    }
+
     private fun parseAgents(s: String): List<Agent> {
         val out = mutableListOf<Agent>()
         try {
@@ -270,7 +307,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 val o = arr.getJSONObject(i)
                 out.add(Agent(o.getInt("id"), o.optString("name"), o.optString("dir"),
                     if (o.isNull("branch")) null else o.optString("branch"),
-                    o.optBoolean("dirty", false)))
+                    o.optBoolean("dirty", false), o.optBoolean("exists", true)))
             }
         } catch (e: Exception) { /* ignore malformed */ }
         return out
@@ -297,6 +334,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             } else {
                 b.visibility = View.GONE
             }
+            v.findViewById<TextView>(R.id.agentDot).setTextColor(
+                ContextCompat.getColor(this@MainActivity, if (a.exists) R.color.dot_ok else R.color.dot_down))
             return v
         }
     }

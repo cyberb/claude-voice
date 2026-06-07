@@ -19,4 +19,6 @@
     <color name="code_com">#6A9955</color>
     <color name="code_num">#B5CEA8</color>
     <color name="code_type">#4EC9B0</color>
+    <color name="dot_ok">#4CAF50</color>
+    <color name="dot_down">#E53935</color>
 </resources>

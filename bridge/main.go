@@ -123,6 +123,7 @@ type agentInfo struct {
 	Name   string  `json:"name"`
 	Branch *string `json:"branch"`
 	Dirty  bool    `json:"dirty"`
+	Exists bool    `json:"exists"`
 }
 
 func agentList() []agentInfo {
@@ -148,7 +149,7 @@ func agentList() []agentInfo {
 		if name == "" || name == string(filepath.Separator) {
 			name = dir
 		}
-		out = append(out, agentInfo{ID: id, Dir: dir, Name: name, Branch: bp, Dirty: dirty})
+		out = append(out, agentInfo{ID: id, Dir: dir, Name: name, Branch: bp, Dirty: dirty, Exists: fileExists(dir)})
 	}
 	return out
 }
