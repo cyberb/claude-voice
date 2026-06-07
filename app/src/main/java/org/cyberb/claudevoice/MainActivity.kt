@@ -150,7 +150,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         findViewById<Button>(R.id.addAgent).setOnClickListener { openDirPicker() }
-        findViewById<Button>(R.id.clearChat).setOnClickListener {
+        findViewById<TextView>(R.id.clearBtn).setOnClickListener {
             val id = currentAgentId ?: return@setOnClickListener
             ui.launch {
                 post("${base()}/agents/$id/clear", "{}".toRequestBody(jsonType))
@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 drawer.closeDrawers()
             }
         }
-        findViewById<Button>(R.id.compactChat).setOnClickListener {
+        findViewById<TextView>(R.id.compactBtn).setOnClickListener {
             val id = currentAgentId ?: return@setOnClickListener
             drawer.closeDrawers()
             tokIn = 0; tokOut = 0
@@ -371,20 +371,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
         workdir.text = shortPath(a.dir)
-        val ctx = ctxByAgent[a.id]
-        val ctxStr = if (ctx != null && ctx.first > 0) {
-            val maxS = if (ctx.second > 0) "/${fmtTok(ctx.second)}" else ""
-            "ctx ${fmtTok(ctx.first)}$maxS"
-        } else ""
-        val branchStr = a.branch?.let { it + if (a.dirty) " ✗" else "" } ?: ""
-        val combined = listOf(branchStr, ctxStr).filter { it.isNotEmpty() }.joinToString("   ·   ")
-        if (combined.isEmpty()) {
-            branch.visibility = View.GONE
-        } else {
+        if (a.branch != null) {
             branch.visibility = View.VISIBLE
-            branch.text = combined
+            branch.text = a.branch + if (a.dirty) " ✗" else ""
             branch.setTextColor(ContextCompat.getColor(this,
                 if (a.dirty) R.color.branch_dirty else R.color.branch_text))
+        } else {
+            branch.visibility = View.GONE
         }
     }
 
@@ -787,6 +780,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val sb = StringBuilder(statusWord)
         if (statusWord == "thinking…" || statusWord == "compacting…") {
             sb.append("  ").append((System.currentTimeMillis() - thinkingStart) / 1000).append("s")
+        }
+        val ctx = ctxByAgent[currentAgentId ?: -1]
+        if (ctx != null && ctx.first > 0) {
+            sb.append("   ctx ").append(fmtTok(ctx.first))
+            if (ctx.second > 0) sb.append("/").append(fmtTok(ctx.second))
         }
         if (tokIn > 0 || tokOut > 0) {
             sb.append("   ↑").append(fmtTok(tokIn)).append(" ↓").append(fmtTok(tokOut))

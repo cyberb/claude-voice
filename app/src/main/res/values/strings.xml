@@ -13,4 +13,6 @@
     <string name="use_piper">Use Piper (neural voice)</string>
     <string name="clear_chat">Clear current chat</string>
     <string name="compact_chat">Compact current chat</string>
+    <string name="clear_short">clear</string>
+    <string name="compact_short">compact</string>
 </resources>

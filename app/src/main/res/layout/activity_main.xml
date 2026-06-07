@@ -48,8 +48,10 @@
 
                 <TextView
                     android:id="@+id/status"
-                    android:layout_width="wrap_content"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:singleLine="true"
                     android:text="ready"
                     android:textColor="@color/status_text"
                     android:textSize="13sp"
@@ -65,14 +67,53 @@
                     android:textColor="@color/workdir_text"
                     android:textSize="12sp" />
 
-                <TextView
-                    android:id="@+id/branch"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:singleLine="true"
-                    android:textColor="@color/branch_text"
-                    android:textSize="12sp"
-                    android:visibility="gone" />
+                    android:layout_marginTop="3dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/branch"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:singleLine="true"
+                        android:textColor="@color/branch_text"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/clearBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/chip_bg"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp"
+                        android:text="@string/clear_short"
+                        android:textColor="@color/status_text"
+                        android:textSize="11sp" />
+
+                    <TextView
+                        android:id="@+id/compactBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:background="@drawable/chip_bg"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="2dp"
+                        android:text="@string/compact_short"
+                        android:textColor="@color/status_text"
+                        android:textSize="11sp" />
+                </LinearLayout>
             </LinearLayout>
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -117,18 +158,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/add_agent" />
-
-        <Button
-            android:id="@+id/clearChat"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/clear_chat" />
-
-        <Button
-            android:id="@+id/compactChat"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/compact_chat" />
 
         <View
             android:layout_width="match_parent"
