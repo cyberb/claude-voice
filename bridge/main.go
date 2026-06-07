@@ -254,6 +254,17 @@ func mustJSON(v interface{}) []byte {
 	return b
 }
 
+func usageTokens(u map[string]interface{}) (int, int) {
+	n := func(k string) int {
+		if v, ok := u[k].(float64); ok {
+			return int(v)
+		}
+		return 0
+	}
+	in := n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens")
+	return in, n("output_tokens")
+}
+
 func transform(line []byte) [][]byte {
 	var ev map[string]interface{}
 	if json.Unmarshal(line, &ev) != nil {
@@ -276,7 +287,25 @@ func transform(line []byte) [][]byte {
 				out = append(out, mustJSON(map[string]string{"t": "diff", "file": file, "patch": patch}))
 			}
 		}
+		if u, ok := msg["usage"].(map[string]interface{}); ok {
+			ti, to := usageTokens(u)
+			out = append(out, mustJSON(map[string]interface{}{"t": "usage", "in": ti, "out": to}))
+		}
 	case "result":
+		maxCtx := 0
+		if mu, ok := ev["modelUsage"].(map[string]interface{}); ok {
+			for _, v := range mu {
+				if m, ok := v.(map[string]interface{}); ok {
+					if cw, ok := m["contextWindow"].(float64); ok {
+						maxCtx = int(cw)
+					}
+				}
+			}
+		}
+		if u, ok := ev["usage"].(map[string]interface{}); ok {
+			ti, to := usageTokens(u)
+			out = append(out, mustJSON(map[string]interface{}{"t": "usage", "in": ti, "out": to, "max": maxCtx}))
+		}
 		res, _ := ev["result"].(string)
 		out = append(out, mustJSON(map[string]string{"t": "reply", "text": res}))
 	}
@@ -413,11 +442,26 @@ func agentsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func agentDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/agents/")
+	if strings.HasSuffix(rest, "/clear") {
+		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/clear"))
+		if err != nil {
+			writeText(w, 400, "bad id")
+			return
+		}
+		mu.Lock()
+		if a := agents[id]; a != nil {
+			a.started = false
+		}
+		mu.Unlock()
+		writeText(w, 200, "ok")
+		return
+	}
 	if r.Method != http.MethodDelete {
 		writeText(w, 404, "not found")
 		return
 	}
-	id, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/agents/"))
+	id, err := strconv.Atoi(rest)
 	if err != nil {
 		writeText(w, 400, "bad id")
 		return

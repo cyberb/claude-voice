@@ -11,6 +11,8 @@ import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
@@ -91,6 +93,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var usePiper = false
     private var player: MediaPlayer? = null
     private var busy = false
+    private var tokIn = 0
+    private var tokOut = 0
+    private val ctxByAgent = mutableMapOf<Int, Pair<Int, Int>>()
+    private var thinkingStart = 0L
+    private var statusWord = "ready"
+    private val ticker = Handler(Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() { updateStatusLine(); ticker.postDelayed(this, 1000) }
+    }
 
     private val agents = mutableListOf<Agent>()
     private var currentAgentId: Int? = null
@@ -136,6 +147,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         findViewById<Button>(R.id.addAgent).setOnClickListener { openDirPicker() }
+        findViewById<Button>(R.id.clearChat).setOnClickListener {
+            val id = currentAgentId ?: return@setOnClickListener
+            ui.launch {
+                post("${base()}/agents/$id/clear", "{}".toRequestBody(jsonType))
+                transcripts.remove(id)
+                ctxByAgent.remove(id)
+                tokIn = 0; tokOut = 0
+                showTranscript()
+                updateBottom()
+                setStatus("cleared")
+                drawer.closeDrawers()
+            }
+        }
         findViewById<CheckBox>(R.id.piperSwitch).setOnCheckedChangeListener { _, checked -> usePiper = checked }
 
         refreshAgents()
@@ -200,6 +224,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun interrupt() {
         tts.stop()
         stopPlayer()
+        stopThinking()
         currentCall?.cancel()
         chatJob?.cancel()
         recording.set(false)
@@ -325,13 +350,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
         workdir.text = shortPath(a.dir)
-        if (a.branch != null) {
+        val ctx = ctxByAgent[a.id]
+        val ctxStr = if (ctx != null && ctx.first > 0) {
+            val maxS = if (ctx.second > 0) "/${fmtTok(ctx.second)}" else ""
+            "ctx ${fmtTok(ctx.first)}$maxS"
+        } else ""
+        val branchStr = a.branch?.let { it + if (a.dirty) " ✗" else "" } ?: ""
+        val combined = listOf(branchStr, ctxStr).filter { it.isNotEmpty() }.joinToString("   ·   ")
+        if (combined.isEmpty()) {
+            branch.visibility = View.GONE
+        } else {
             branch.visibility = View.VISIBLE
-            branch.text = a.branch + if (a.dirty) "  ✗" else ""
+            branch.text = combined
             branch.setTextColor(ContextCompat.getColor(this,
                 if (a.dirty) R.color.branch_dirty else R.color.branch_text))
-        } else {
-            branch.visibility = View.GONE
         }
     }
 
@@ -387,7 +419,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             val said = post("${base()}/stt", body)
             if (said.isNullOrBlank()) { setStatus("speech-to-text failed"); setBusy(false); return@launch }
             appendYou(said)
-            setStatus("thinking…")
+            startThinking()
             streamChat(aid, said)
         }
     }
@@ -402,7 +434,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 call.execute().use { r ->
                     val src = r.body?.source()
                     if (!r.isSuccessful || src == null) {
-                        withContext(Dispatchers.Main) { setStatus("agent failed"); setBusy(false) }
+                        withContext(Dispatchers.Main) { stopThinking(); setStatus("agent failed"); setBusy(false) }
                         return@use
                     }
                     while (!src.exhausted()) {
@@ -417,14 +449,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 // cancelled or dropped connection
             } finally { currentCall = null }
         }
-        if (!sawReply && busy) { setStatus("agent failed"); setBusy(false) }
+        if (!sawReply && busy) { stopThinking(); setStatus("agent failed"); setBusy(false) }
     }
 
     private fun handleEvent(o: JSONObject) {
         when (o.optString("t")) {
             "action" -> appendAction(o.optString("label"))
             "diff" -> appendDiff(o.optString("file"), o.optString("patch"))
+            "usage" -> {
+                tokIn = o.optInt("in", tokIn)
+                tokOut = o.optInt("out", tokOut)
+                val id = currentAgentId ?: -1
+                val max = o.optInt("max", ctxByAgent[id]?.second ?: 0)
+                ctxByAgent[id] = Pair(tokIn, max)
+                updateStatusLine()
+                updateBottom()
+            }
             "reply" -> {
+                stopThinking()
                 val text = o.optString("text")
                 appendReply(text)
                 setStatus("speaking…")
@@ -644,7 +686,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         appendSpan("\n")
     }
 
-    private fun setStatus(s: String) { status.text = s }
+    private fun setStatus(s: String) { statusWord = s; updateStatusLine() }
+
+    private fun updateStatusLine() {
+        val sb = StringBuilder(statusWord)
+        if (statusWord == "thinking…") {
+            sb.append("  ").append((System.currentTimeMillis() - thinkingStart) / 1000).append("s")
+        }
+        if (tokIn > 0 || tokOut > 0) {
+            sb.append("   ↑").append(fmtTok(tokIn)).append(" ↓").append(fmtTok(tokOut))
+        }
+        status.text = sb.toString()
+    }
+
+    private fun fmtTok(n: Int) = if (n >= 1000) "${n / 1000}k" else "$n"
+
+    private fun startThinking() {
+        tokIn = 0; tokOut = 0
+        thinkingStart = System.currentTimeMillis()
+        setStatus("thinking…")
+        ticker.removeCallbacks(tick); ticker.post(tick)
+    }
+
+    private fun stopThinking() { ticker.removeCallbacks(tick) }
 
     override fun onDestroy() {
         super.onDestroy()
