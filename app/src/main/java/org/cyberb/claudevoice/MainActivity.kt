@@ -156,6 +156,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             drawer.closeDrawers()
         }
 
+        agentList.setOnItemLongClickListener { _, _, pos, _ ->
+            val a = agents[pos]
+            AlertDialog.Builder(this)
+                .setTitle("Remove agent")
+                .setMessage("Remove “${a.name}”? This just stops tracking it — the directory and its files are untouched.")
+                .setPositiveButton("Remove") { _, _ ->
+                    ui.launch {
+                        val s = httpDelete("${base()}/agents/${a.id}") ?: run { setStatus("remove failed"); return@launch }
+                        transcripts.remove(a.id)
+                        ctxByAgent.remove(a.id)
+                        setAgents(parseAgents(s))
+                        agentsSig = ""
+                        if (currentAgentId == a.id) {
+                            currentAgentId = agents.firstOrNull()?.id
+                            showTranscript()
+                        }
+                        updateBottom()
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            true
+        }
+
         findViewById<Button>(R.id.addAgent).setOnClickListener { openDirPicker() }
         findViewById<TextView>(R.id.clearBtn).setOnClickListener {
             val id = currentAgentId ?: return@setOnClickListener
@@ -624,6 +648,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private suspend fun httpGet(url: String): String? = withContext(Dispatchers.IO) {
         try {
             http.newCall(Request.Builder().url(url).get().build()).execute().use { r ->
+                if (r.isSuccessful) r.body?.string()?.trim() else null
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private suspend fun httpDelete(url: String): String? = withContext(Dispatchers.IO) {
+        try {
+            http.newCall(Request.Builder().url(url).delete().build()).execute().use { r ->
                 if (r.isSuccessful) r.body?.string()?.trim() else null
             }
         } catch (e: Exception) { null }
