@@ -4,6 +4,8 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -20,6 +22,7 @@ import android.text.Spannable
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.style.ForegroundColorSpan
+import android.text.style.LineBackgroundSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.view.MotionEvent
@@ -679,12 +682,86 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         code = code.substring(nl + 1)
                     }
                 }
-                for (line in code.trimEnd('\n').split("\n")) {
-                    appendSpan(colored("$line\n", R.color.code_text, mono = true))
-                }
+                appendSpan(codeBlock(code))
             }
         }
         appendSpan("\n")
+    }
+
+    private fun col(res: Int) = ContextCompat.getColor(this, res)
+
+    private val codeKeywords = setOf(
+        "val", "var", "fun", "def", "class", "interface", "object", "return", "if", "else", "for",
+        "while", "do", "when", "switch", "case", "break", "continue", "import", "package", "public",
+        "private", "protected", "static", "final", "void", "new", "this", "super", "try", "catch",
+        "finally", "throw", "throws", "func", "let", "const", "type", "struct", "enum", "defer",
+        "range", "map", "chan", "select", "async", "await", "yield", "lambda", "in", "is", "as",
+        "and", "or", "not", "true", "false", "null", "nil", "none", "int", "string", "bool",
+        "boolean", "float", "double", "long", "char", "byte", "echo", "print", "println", "with",
+        "from", "global", "pass", "raise", "except", "elif", "using", "namespace", "template",
+        "unsigned", "virtual", "override", "suspend", "data", "sealed", "companion", "init", "by"
+    )
+
+    private fun codeBlock(code: String): CharSequence {
+        val body = code.trimEnd('\n') + "\n"
+        val sb = SpannableStringBuilder(body)
+        val flag = Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        sb.setSpan(ForegroundColorSpan(col(R.color.code_text)), 0, sb.length, flag)
+        sb.setSpan(TypefaceSpan("monospace"), 0, sb.length, flag)
+        sb.setSpan(CodeBlockBg(col(R.color.code_bg)), 0, sb.length, flag)
+        highlightInto(sb, body)
+        return sb
+    }
+
+    private fun highlightInto(sb: SpannableStringBuilder, code: String) {
+        val n = code.length
+        var i = 0
+        fun span(s: Int, e: Int, c: Int) =
+            sb.setSpan(ForegroundColorSpan(c), s, e, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val kw = col(R.color.code_kw); val str = col(R.color.code_str)
+        val com = col(R.color.code_com); val num = col(R.color.code_num)
+        while (i < n) {
+            val c = code[i]
+            when {
+                c == '/' && i + 1 < n && code[i + 1] == '/' -> {
+                    val s = i; while (i < n && code[i] != '\n') i++; span(s, i, com)
+                }
+                c == '#' -> { val s = i; while (i < n && code[i] != '\n') i++; span(s, i, com) }
+                c == '/' && i + 1 < n && code[i + 1] == '*' -> {
+                    val s = i; i += 2
+                    while (i + 1 < n && !(code[i] == '*' && code[i + 1] == '/')) i++
+                    i = minOf(n, i + 2); span(s, i, com)
+                }
+                c == '"' || c == '\'' || c == '`' -> {
+                    val q = c; val s = i; i++
+                    while (i < n && code[i] != q) { if (code[i] == '\\') i++; i++ }
+                    i = minOf(n, i + 1); span(s, i, str)
+                }
+                c.isDigit() -> {
+                    val s = i
+                    while (i < n && (code[i].isLetterOrDigit() || code[i] == '.')) i++
+                    span(s, i, num)
+                }
+                c.isLetter() || c == '_' -> {
+                    val s = i
+                    while (i < n && (code[i].isLetterOrDigit() || code[i] == '_')) i++
+                    if (code.substring(s, i) in codeKeywords) span(s, i, kw)
+                }
+                else -> i++
+            }
+        }
+    }
+
+    private class CodeBlockBg(private val bg: Int) : LineBackgroundSpan {
+        override fun drawBackground(
+            canvas: Canvas, paint: Paint, left: Int, right: Int, top: Int,
+            baseline: Int, bottom: Int, text: CharSequence, start: Int, end: Int, lineNumber: Int
+        ) {
+            val orig = paint.color
+            paint.color = bg
+            canvas.drawRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), paint)
+            paint.color = orig
+        }
     }
 
     private fun appendAction(label: String) {
