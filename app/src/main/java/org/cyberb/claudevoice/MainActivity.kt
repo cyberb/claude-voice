@@ -338,10 +338,48 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         stripMd(t).lines().joinToString("\n") { it.trimEnd() }.trim()
 
     private fun forSpeech(t: String): String {
-        var s = stripMd(t)
+        var s = speakTables(t)
+        s = stripMd(s)
+        s = Regex("\\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\b").replace(s, "an ID")
+        s = Regex("\\b[0-9a-f]{12,}\\b", RegexOption.IGNORE_CASE).replace(s, "an ID")
         s = Regex("https?://\\S+").replace(s, "link")
+        s = s.replace("|", " ")
         s = Regex("\\s+").replace(s, " ").trim()
         return s
+    }
+
+    private fun speakTables(t: String): String {
+        val lines = t.lines()
+        fun cells(line: String) = line.trim().trim('|').split("|").map { it.trim() }
+        fun isSep(line: String): Boolean {
+            val c = line.trim().trim('|').trim()
+            return c.isNotEmpty() && c.all { it == '-' || it == ':' || it == '|' || it == ' ' } && c.contains('-')
+        }
+        val out = StringBuilder()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.contains("|") && i + 1 < lines.size && isSep(lines[i + 1])) {
+                val header = cells(line)
+                i += 2
+                while (i < lines.size && lines[i].contains("|")) {
+                    val row = cells(lines[i])
+                    val parts = ArrayList<String>()
+                    for (j in row.indices) {
+                        val v = row[j]
+                        if (v.isEmpty()) continue
+                        val h = header.getOrNull(j)?.takeIf { it.isNotEmpty() }
+                        parts.add(if (h != null) "$h: $v" else v)
+                    }
+                    if (parts.isNotEmpty()) out.append(parts.joinToString(", ")).append(". ")
+                    i++
+                }
+            } else {
+                out.append(line).append("\n")
+                i++
+            }
+        }
+        return out.toString()
     }
 
     private fun base() = bridgeUrl.text.toString().trim().trimEnd('/')
