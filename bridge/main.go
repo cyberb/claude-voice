@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -175,48 +176,111 @@ func transcribe(wav []byte) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-func ask(id int, text string) string {
-	if text == "" {
-		return ""
+func trunc(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) > n {
+		return s[:n] + "…"
 	}
-	mu.Lock()
-	a := agents[id]
-	var dir string
-	var started bool
-	if a != nil {
-		dir, started = a.dir, a.started
+	return s
+}
+
+func toolLabel(name string, in map[string]interface{}) string {
+	s := func(k string) string { v, _ := in[k].(string); return v }
+	switch name {
+	case "Bash":
+		return "Bash: " + trunc(s("command"), 100)
+	case "Read":
+		return "Read " + filepath.Base(s("file_path"))
+	case "Edit", "Write", "MultiEdit", "NotebookEdit":
+		return name + " " + filepath.Base(s("file_path"))
+	case "Grep":
+		return "Grep " + s("pattern")
+	case "Glob":
+		return "Glob " + s("pattern")
+	case "WebFetch", "WebSearch":
+		return name + " " + s("url") + s("query")
+	case "Task":
+		return "Task: " + trunc(s("description"), 70)
+	default:
+		return name
 	}
-	mu.Unlock()
-	if a == nil {
-		return "Unknown agent."
-	}
-	args := []string{"-p"}
-	if started {
-		args = append(args, "--continue")
-	}
-	args = append(args, "--permission-mode", perm, text)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Sprintf("The agent took longer than %d seconds, so I stopped it. Try a smaller step.", timeout)
-	}
-	mu.Lock()
-	if agents[id] != nil {
-		agents[id].started = true
-	}
-	mu.Unlock()
-	if s := strings.TrimSpace(string(out)); s != "" {
-		return s
-	}
-	if ee, ok := err.(*exec.ExitError); ok {
-		if m := strings.TrimSpace(string(ee.Stderr)); m != "" {
-			return m
+}
+
+func diffPatch(name string, in map[string]interface{}) (string, string, bool) {
+	s := func(k string) string { v, _ := in[k].(string); return v }
+	file := filepath.Base(s("file_path"))
+	minus := func(t string) string {
+		var b strings.Builder
+		for _, l := range strings.Split(strings.TrimRight(t, "\n"), "\n") {
+			b.WriteString("- " + l + "\n")
 		}
+		return b.String()
 	}
-	return "No response."
+	plus := func(t string) string {
+		var b strings.Builder
+		for _, l := range strings.Split(strings.TrimRight(t, "\n"), "\n") {
+			b.WriteString("+ " + l + "\n")
+		}
+		return b.String()
+	}
+	cap := func(p string) string {
+		lines := strings.Split(strings.TrimRight(p, "\n"), "\n")
+		if len(lines) > 40 {
+			lines = append(lines[:40], "… (truncated)")
+		}
+		return strings.Join(lines, "\n")
+	}
+	switch name {
+	case "Edit":
+		return cap(minus(s("old_string")) + plus(s("new_string"))), file, true
+	case "Write":
+		return cap(plus(s("content"))), file, true
+	case "MultiEdit":
+		edits, _ := in["edits"].([]interface{})
+		var b strings.Builder
+		for _, e := range edits {
+			m, _ := e.(map[string]interface{})
+			o, _ := m["old_string"].(string)
+			ns, _ := m["new_string"].(string)
+			b.WriteString(minus(o) + plus(ns))
+		}
+		return cap(b.String()), file, true
+	}
+	return "", "", false
+}
+
+func mustJSON(v interface{}) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func transform(line []byte) [][]byte {
+	var ev map[string]interface{}
+	if json.Unmarshal(line, &ev) != nil {
+		return nil
+	}
+	out := [][]byte{}
+	switch ev["type"] {
+	case "assistant":
+		msg, _ := ev["message"].(map[string]interface{})
+		content, _ := msg["content"].([]interface{})
+		for _, c := range content {
+			block, _ := c.(map[string]interface{})
+			if block["type"] != "tool_use" {
+				continue
+			}
+			name, _ := block["name"].(string)
+			in, _ := block["input"].(map[string]interface{})
+			out = append(out, mustJSON(map[string]string{"t": "action", "label": toolLabel(name, in)}))
+			if patch, file, ok := diffPatch(name, in); ok {
+				out = append(out, mustJSON(map[string]string{"t": "diff", "file": file, "patch": patch}))
+			}
+		}
+	case "result":
+		res, _ := ev["result"].(string)
+		out = append(out, mustJSON(map[string]string{"t": "reply", "text": res}))
+	}
+	return out
 }
 
 func piperEnabled() bool {
@@ -421,7 +485,65 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	} else if lst := agentList(); len(lst) > 0 {
 		id = lst[0].ID
 	}
-	writeText(w, 200, ask(id, p.Text))
+	mu.Lock()
+	a := agents[id]
+	var dir string
+	var started bool
+	if a != nil {
+		dir, started = a.dir, a.started
+	}
+	mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	flusher, _ := w.(http.Flusher)
+	emit := func(b []byte) {
+		w.Write(b)
+		w.Write([]byte("\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if a == nil || strings.TrimSpace(p.Text) == "" {
+		emit(mustJSON(map[string]string{"t": "reply", "text": "Unknown agent."}))
+		return
+	}
+
+	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
+	if started {
+		args = append(args, "--continue")
+	}
+	args = append(args, "--permission-mode", perm, p.Text)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Dir = dir
+	stdout, err := cmd.StdoutPipe()
+	if err != nil || cmd.Start() != nil {
+		emit(mustJSON(map[string]string{"t": "reply", "text": "Failed to start agent."}))
+		return
+	}
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	sawReply := false
+	for sc.Scan() {
+		for _, e := range transform(sc.Bytes()) {
+			if strings.Contains(string(e), `"t":"reply"`) {
+				sawReply = true
+			}
+			emit(e)
+		}
+	}
+	cmd.Wait()
+	if ctx.Err() == context.DeadlineExceeded {
+		emit(mustJSON(map[string]string{"t": "reply", "text": fmt.Sprintf("The agent took longer than %d seconds, so I stopped it. Try a smaller step.", timeout)}))
+	} else if !sawReply {
+		emit(mustJSON(map[string]string{"t": "reply", "text": "No response."}))
+	}
+	mu.Lock()
+	if agents[id] != nil {
+		agents[id].started = true
+	}
+	mu.Unlock()
 }
 
 func main() {

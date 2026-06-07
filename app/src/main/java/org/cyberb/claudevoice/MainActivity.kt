@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.Typeface
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaPlayer
@@ -13,6 +14,11 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -376,15 +382,51 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         chatJob = ui.launch {
             val said = post("${base()}/stt", body)
             if (said.isNullOrBlank()) { setStatus("speech-to-text failed"); setBusy(false); return@launch }
-            append("you", said)
+            appendYou(said)
             setStatus("thinking…")
-            val payload = JSONObject().put("text", said).put("agent", aid).toString().toRequestBody(jsonType)
-            val reply = post("${base()}/chat", payload)
-            if (reply.isNullOrBlank()) { setStatus("agent failed"); setBusy(false); return@launch }
-            append("agent", forDisplay(reply))
-            setStatus("speaking…")
-            val speech = forSpeech(reply)
-            if (usePiper) speakPiper(speech) else tts.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "reply")
+            streamChat(aid, said)
+        }
+    }
+
+    private suspend fun streamChat(aid: Int, text: String) {
+        val payload = JSONObject().put("text", text).put("agent", aid).toString().toRequestBody(jsonType)
+        var sawReply = false
+        withContext(Dispatchers.IO) {
+            val call = http.newCall(Request.Builder().url("${base()}/chat").post(payload).build())
+            currentCall = call
+            try {
+                call.execute().use { r ->
+                    val src = r.body?.source()
+                    if (!r.isSuccessful || src == null) {
+                        withContext(Dispatchers.Main) { setStatus("agent failed"); setBusy(false) }
+                        return@use
+                    }
+                    while (!src.exhausted()) {
+                        val line = src.readUtf8Line() ?: break
+                        if (line.isBlank()) continue
+                        val o = try { JSONObject(line) } catch (e: Exception) { continue }
+                        if (o.optString("t") == "reply") sawReply = true
+                        withContext(Dispatchers.Main) { handleEvent(o) }
+                    }
+                }
+            } catch (e: Exception) {
+                // cancelled or dropped connection
+            } finally { currentCall = null }
+        }
+        if (!sawReply && busy) { setStatus("agent failed"); setBusy(false) }
+    }
+
+    private fun handleEvent(o: JSONObject) {
+        when (o.optString("t")) {
+            "action" -> appendAction(o.optString("label"))
+            "diff" -> appendDiff(o.optString("file"), o.optString("patch"))
+            "reply" -> {
+                val text = o.optString("text")
+                appendReply(forDisplay(text))
+                setStatus("speaking…")
+                val speech = forSpeech(text)
+                if (usePiper) speakPiper(speech) else tts.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "reply")
+            }
         }
     }
 
@@ -524,9 +566,43 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         return out.toByteArray()
     }
 
-    private fun append(who: String, text: String) {
-        transcript.append("$who: $text\n\n")
+    private fun appendSpan(cs: CharSequence) {
+        transcript.append(cs)
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    private fun colored(text: String, colorRes: Int, mono: Boolean = false, italic: Boolean = false): SpannableString {
+        val s = SpannableString(text)
+        s.setSpan(ForegroundColorSpan(ContextCompat.getColor(this, colorRes)), 0, s.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (mono) s.setSpan(TypefaceSpan("monospace"), 0, s.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (italic) s.setSpan(StyleSpan(Typeface.ITALIC), 0, s.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return s
+    }
+
+    private fun appendYou(text: String) {
+        appendSpan(colored("you  ", R.color.branch_text))
+        appendSpan("$text\n\n")
+    }
+
+    private fun appendReply(text: String) {
+        appendSpan("$text\n\n")
+    }
+
+    private fun appendAction(label: String) {
+        appendSpan(colored("▸ $label\n", R.color.action_text, italic = true))
+    }
+
+    private fun appendDiff(file: String, patch: String) {
+        appendSpan(colored("✎ $file\n", R.color.action_text, italic = true))
+        for (line in patch.split("\n")) {
+            val color = when {
+                line.startsWith("+") -> R.color.diff_add
+                line.startsWith("-") -> R.color.diff_del
+                else -> R.color.action_text
+            }
+            appendSpan(colored("$line\n", color, mono = true))
+        }
+        appendSpan("\n")
     }
 
     private fun setStatus(s: String) { status.text = s }

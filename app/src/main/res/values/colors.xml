@@ -9,4 +9,7 @@
     <color name="workdir_text">#9E9E9E</color>
     <color name="branch_text">#4DB6AC</color>
     <color name="branch_dirty">#FFB74D</color>
+    <color name="action_text">#7E8A99</color>
+    <color name="diff_add">#81C784</color>
+    <color name="diff_del">#E57373</color>
 </resources>
