@@ -148,5 +148,12 @@
             android:id="@+id/voiceSpinner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
+
+        <CheckBox
+            android:id="@+id/piperSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/use_piper" />
     </LinearLayout>
 </androidx.drawerlayout.widget.DrawerLayout>

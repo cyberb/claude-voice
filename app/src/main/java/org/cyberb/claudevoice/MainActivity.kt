@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
@@ -16,6 +17,7 @@ import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -42,6 +44,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -76,6 +79,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val voices = mutableListOf<Voice>()
     private var chatJob: Job? = null
     @Volatile private var currentCall: okhttp3.Call? = null
+    private var usePiper = false
+    private var player: MediaPlayer? = null
 
     private val agents = mutableListOf<Agent>()
     private var currentAgentId: Int? = null
@@ -97,6 +102,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         stop.setOnClickListener {
             tts.stop()
+            stopPlayer()
             currentCall?.cancel()
             chatJob?.cancel()
             recording.set(false)
@@ -122,6 +128,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         findViewById<Button>(R.id.addAgent).setOnClickListener { openDirPicker() }
+        findViewById<CheckBox>(R.id.piperSwitch).setOnCheckedChangeListener { _, checked -> usePiper = checked }
 
         refreshAgents()
     }
@@ -320,8 +327,44 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (reply.isNullOrBlank()) { setStatus("agent failed"); return@launch }
             append("agent", forDisplay(reply))
             setStatus("ready")
-            tts.speak(forSpeech(reply), TextToSpeech.QUEUE_FLUSH, null, "reply")
+            val speech = forSpeech(reply)
+            if (usePiper) speakPiper(speech) else tts.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "reply")
         }
+    }
+
+    private fun speakPiper(text: String) {
+        ui.launch {
+            val wav = postBytes("${base()}/tts", JSONObject().put("text", text).toString().toRequestBody(jsonType))
+            if (wav == null || wav.isEmpty()) {
+                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
+                return@launch
+            }
+            playWav(wav)
+        }
+    }
+
+    private fun playWav(wav: ByteArray) {
+        try {
+            val f = File(cacheDir, "reply.wav")
+            f.writeBytes(wav)
+            stopPlayer()
+            player = MediaPlayer().apply {
+                setDataSource(f.absolutePath)
+                setOnCompletionListener { mp -> mp.release(); if (player === mp) player = null }
+                prepare()
+                start()
+            }
+        } catch (e: Exception) {
+            setStatus("playback failed")
+        }
+    }
+
+    private fun stopPlayer() {
+        player?.let {
+            try { it.stop() } catch (e: Exception) { }
+            it.release()
+        }
+        player = null
     }
 
     private fun stripMd(t: String): String {
@@ -402,6 +445,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } catch (e: Exception) { null } finally { currentCall = null }
     }
 
+    private suspend fun postBytes(url: String, body: RequestBody): ByteArray? = withContext(Dispatchers.IO) {
+        val call = http.newCall(Request.Builder().url(url).post(body).build())
+        currentCall = call
+        try {
+            call.execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
+        } catch (e: Exception) { null } finally { currentCall = null }
+    }
+
     private fun wav(data: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
         val byteRate = sampleRate * 2
@@ -427,6 +478,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         super.onDestroy()
         recording.set(false)
+        stopPlayer()
         tts.shutdown()
     }
 }

@@ -37,6 +37,12 @@ var (
 	timeout = envInt("VOICE_TIMEOUT", 180)
 	host    = env("VOICE_HOST", "127.0.0.1")
 	port    = env("VOICE_PORT", "8765")
+
+	piperBin    = env("PIPER_BIN", expand("~/piper/piper"))
+	piperLib    = env("PIPER_LIB", filepath.Dir(piperBin))
+	piperEspeak = env("PIPER_ESPEAK", filepath.Join(filepath.Dir(piperBin), "espeak-ng-data"))
+	piperVoices = env("PIPER_VOICES", expand("~/piper-voices"))
+	piperModel  = env("PIPER_MODEL", "")
 )
 
 type agent struct {
@@ -213,6 +219,103 @@ func ask(id int, text string) string {
 	return "No response."
 }
 
+func piperEnabled() bool {
+	_, err := os.Stat(piperBin)
+	return err == nil
+}
+
+func listVoices() []string {
+	entries, err := os.ReadDir(piperVoices)
+	if err != nil {
+		return []string{}
+	}
+	out := []string{}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".onnx") {
+			out = append(out, strings.TrimSuffix(e.Name(), ".onnx"))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func resolveVoice(name string) string {
+	if name != "" {
+		if p := filepath.Join(piperVoices, name+".onnx"); fileExists(p) {
+			return p
+		}
+	}
+	if piperModel != "" && fileExists(piperModel) {
+		return piperModel
+	}
+	for _, v := range listVoices() {
+		return filepath.Join(piperVoices, v+".onnx")
+	}
+	return ""
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func synth(text, voice string) ([]byte, error) {
+	model := resolveVoice(voice)
+	if model == "" {
+		return nil, fmt.Errorf("no voice model")
+	}
+	d, err := os.MkdirTemp("", "tts")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(d)
+	wav := filepath.Join(d, "o.wav")
+	cmd := exec.Command("grun", piperBin, "-m", model, "--espeak_data", piperEspeak, "-f", wav)
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+piperLib)
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(wav)
+}
+
+func voicesHandler(w http.ResponseWriter, r *http.Request) {
+	if !piperEnabled() {
+		writeJSON(w, 200, []string{})
+		return
+	}
+	writeJSON(w, 200, listVoices())
+}
+
+func ttsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	if !piperEnabled() {
+		writeText(w, 501, "piper not configured")
+		return
+	}
+	var p struct {
+		Text  string `json:"text"`
+		Voice string `json:"voice"`
+	}
+	json.NewDecoder(r.Body).Decode(&p)
+	if strings.TrimSpace(p.Text) == "" {
+		writeText(w, 400, "empty text")
+		return
+	}
+	wav, err := synth(p.Text, p.Voice)
+	if err != nil {
+		writeText(w, 500, "tts failed")
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
+	w.WriteHeader(200)
+	w.Write(wav)
+}
+
 func writeText(w http.ResponseWriter, code int, body string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(code)
@@ -335,6 +438,8 @@ func main() {
 	mux.HandleFunc("/ls", lsHandler)
 	mux.HandleFunc("/stt", sttHandler)
 	mux.HandleFunc("/chat", chatHandler)
+	mux.HandleFunc("/tts", ttsHandler)
+	mux.HandleFunc("/voices", voicesHandler)
 
 	addr := host + ":" + port
 	fmt.Printf("claude-voice bridge on http://%s  (perm=%s, start_dir=%s)\n", addr, perm, start)

@@ -33,8 +33,11 @@ so the app on the same phone connects to it).
 | GET    | `/agents`   | —                   | `[{id,name,dir,branch,dirty}]`   |
 | POST   | `/agents`   | `{"dir":"~/repo"}`  | current agent list               |
 | DELETE | `/agents/<id>` | —                | current agent list               |
+| GET    | `/ls?dir=`  | —                   | `{dir,parent,dirs}` (folder browse) |
 | POST   | `/stt`      | WAV bytes           | transcript (whisper.cpp)         |
 | POST   | `/chat`     | `{"text","agent":id}` | agent reply (`claude -p`)      |
+| GET    | `/voices`   | —                   | installed Piper voices (`[]` if off) |
+| POST   | `/tts`      | `{"text","voice"}`  | WAV audio (Piper) or 501 if off  |
 
 One agent per directory; each keeps its own `claude --continue` conversation, so
 per-dir continuity is automatic.
@@ -48,6 +51,15 @@ per-dir continuity is automatic.
 - `VOICE_TIMEOUT` seconds before a stuck agent turn is aborted (default `180`)
 - `VOICE_WORKDIR` directory of the initial agent (default: cwd)
 - `WHISPER_BIN`, `WHISPER_MODEL` paths to the whisper.cpp cli + ggml model
+- `PIPER_BIN` (default `~/piper/piper`), `PIPER_VOICES` (default `~/piper-voices`),
+  `PIPER_MODEL` (default: first voice). Run `./install-piper.sh` to set these up.
+
+## Piper (neural voices, optional)
+
+If a Piper engine is present at `~/piper`, the bridge enables `/tts` and `/voices`;
+otherwise `/tts` returns 501 and the app falls back to Android TTS. Piper runs as a
+glibc binary via `grun`, so `pkg install glibc-runner` is required. Install with
+`./install-piper.sh`. Add voices by dropping `<name>.onnx[.json]` into `~/piper-voices`.
 
 Requires the whisper.cpp build at `~/storage/projects/whisper.cpp` and a model at
 `~/whisper-models/ggml-base.en.bin`, plus the `claude` CLI on `PATH`.
