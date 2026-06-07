@@ -20,7 +20,8 @@ WHISPER = os.environ.get("WHISPER_BIN",
                          os.path.expanduser("~/storage/projects/whisper.cpp/build/bin/whisper-cli"))
 MODEL = os.environ.get("WHISPER_MODEL",
                        os.path.expanduser("~/whisper-models/ggml-base.en.bin"))
-PERM = os.environ.get("VOICE_PERM", "acceptEdits")
+PERM = os.environ.get("VOICE_PERM", "bypassPermissions")
+TIMEOUT = int(os.environ.get("VOICE_TIMEOUT", "180"))
 WORKDIR = os.environ.get("VOICE_WORKDIR", os.getcwd())
 HOST = os.environ.get("VOICE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("VOICE_PORT", "8765"))
@@ -55,9 +56,15 @@ def ask(text):
     if _session["started"]:
         cmd.append("--continue")
     cmd += ["--permission-mode", PERM, text]
+    try:
+        r = subprocess.run(cmd, cwd=WORKDIR, capture_output=True, text=True, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return f"The agent took longer than {TIMEOUT} seconds, so I stopped it. Try a smaller step."
     _session["started"] = True
-    r = subprocess.run(cmd, cwd=WORKDIR, capture_output=True, text=True)
-    return (r.stdout or "").strip() or "No response."
+    out = (r.stdout or "").strip()
+    if out:
+        return out
+    return (r.stderr or "").strip() or "No response."
 
 
 class Handler(BaseHTTPRequestHandler):

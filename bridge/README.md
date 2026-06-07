@@ -25,7 +25,10 @@ so the app on the same phone can connect).
 ## Config (env)
 
 - `VOICE_PORT` (default `8765`), `VOICE_HOST` (default `127.0.0.1`)
-- `VOICE_PERM` claude permission mode (default `acceptEdits`; `bypassPermissions` for full hands-free)
+- `VOICE_PERM` claude permission mode (default `bypassPermissions` so the agent can
+  use tools hands-free; set `acceptEdits` to gate Bash/tool calls — note that gating
+  makes tool-using turns stall, since headless mode can't answer prompts)
+- `VOICE_TIMEOUT` seconds before a stuck agent turn is aborted (default `180`)
 - `VOICE_WORKDIR` agent working dir (default: cwd)
 - `WHISPER_BIN`, `WHISPER_MODEL` paths to the whisper.cpp cli + ggml model
 
