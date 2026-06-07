@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Claude Voice</string>
+    <string name="talk">Hold to talk</string>
+    <string name="stop">Stop &amp; send</string>
+    <string name="bridge_hint">Bridge URL</string>
+</resources>

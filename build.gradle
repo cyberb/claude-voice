@@ -1,0 +1,21 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+    }
+}
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '2.0.10'
+}
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+repositories {
+    mavenCentral()
+}

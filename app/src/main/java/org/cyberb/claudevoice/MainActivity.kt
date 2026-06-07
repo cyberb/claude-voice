@@ -1,0 +1,173 @@
+package org.cyberb.claudevoice
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.os.Bundle
+import android.speech.tts.TextToSpeech
+import android.view.MotionEvent
+import android.widget.Button
+import android.widget.EditText
+import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
+
+    private val sampleRate = 16000
+    private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val http = OkHttpClient.Builder()
+        .callTimeout(180, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .build()
+
+    private val recording = AtomicBoolean(false)
+    private var recordThread: Thread? = null
+    private val pcm = ByteArrayOutputStream()
+
+    private lateinit var tts: TextToSpeech
+    private lateinit var transcript: TextView
+    private lateinit var scroll: ScrollView
+    private lateinit var status: TextView
+    private lateinit var bridgeUrl: EditText
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        transcript = findViewById(R.id.transcript)
+        scroll = findViewById(R.id.scroll)
+        status = findViewById(R.id.status)
+        bridgeUrl = findViewById(R.id.bridgeUrl)
+        val talk = findViewById<Button>(R.id.talk)
+
+        tts = TextToSpeech(this, this)
+        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+
+        talk.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> { v.isPressed = true; startRecording(); true }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { v.isPressed = false; stopAndSend(); true }
+                else -> false
+            }
+        }
+    }
+
+    override fun onInit(statusCode: Int) {
+        if (statusCode == TextToSpeech.SUCCESS) tts.language = Locale.US
+    }
+
+    private fun hasMic() = ContextCompat.checkSelfPermission(
+        this, Manifest.permission.RECORD_AUDIO
+    ) == PackageManager.PERMISSION_GRANTED
+
+    private fun startRecording() {
+        if (recording.get()) return
+        if (!hasMic()) { setStatus("grant microphone permission"); return }
+        pcm.reset()
+        val minBuf = AudioRecord.getMinBufferSize(
+            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        val record = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC, sampleRate,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf
+            )
+        } catch (e: SecurityException) { setStatus("microphone unavailable"); return }
+        recording.set(true)
+        setStatus("listening…")
+        recordThread = Thread {
+            val buf = ByteArray(minBuf)
+            record.startRecording()
+            while (recording.get()) {
+                val n = record.read(buf, 0, buf.size)
+                if (n > 0) synchronized(pcm) { pcm.write(buf, 0, n) }
+            }
+            record.stop()
+            record.release()
+        }.also { it.start() }
+    }
+
+    private fun stopAndSend() {
+        if (!recording.get()) return
+        recording.set(false)
+        recordThread?.join()
+        val audio = synchronized(pcm) { pcm.toByteArray() }
+        if (audio.isEmpty()) { setStatus("nothing recorded"); return }
+        val body = wav(audio).toRequestBody("audio/wav".toMediaType())
+        setStatus("transcribing…")
+        ui.launch {
+            val said = post("${base()}/stt", body)
+            if (said.isNullOrBlank()) { setStatus("speech-to-text failed"); return@launch }
+            append("you", said)
+            setStatus("thinking…")
+            val payload = JSONObject().put("text", said).toString()
+                .toRequestBody("application/json".toMediaType())
+            val reply = post("${base()}/chat", payload)
+            if (reply.isNullOrBlank()) { setStatus("agent failed"); return@launch }
+            append("agent", reply)
+            setStatus("ready")
+            tts.speak(reply, TextToSpeech.QUEUE_FLUSH, null, "reply")
+        }
+    }
+
+    private fun base() = bridgeUrl.text.toString().trim().trimEnd('/')
+
+    private suspend fun post(url: String, body: RequestBody): String? = withContext(Dispatchers.IO) {
+        try {
+            http.newCall(Request.Builder().url(url).post(body).build()).execute().use { r ->
+                if (r.isSuccessful) r.body?.string()?.trim() else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun wav(data: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        val byteRate = sampleRate * 2
+        fun le16(v: Int) { out.write(v and 0xff); out.write((v ushr 8) and 0xff) }
+        fun le32(v: Int) {
+            out.write(v and 0xff); out.write((v ushr 8) and 0xff)
+            out.write((v ushr 16) and 0xff); out.write((v ushr 24) and 0xff)
+        }
+        out.write("RIFF".toByteArray()); le32(36 + data.size); out.write("WAVE".toByteArray())
+        out.write("fmt ".toByteArray()); le32(16); le16(1); le16(1)
+        le32(sampleRate); le32(byteRate); le16(2); le16(16)
+        out.write("data".toByteArray()); le32(data.size); out.write(data)
+        return out.toByteArray()
+    }
+
+    private fun append(who: String, text: String) {
+        transcript.append("$who: $text\n\n")
+        scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    private fun setStatus(s: String) { status.text = s }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        recording.set(false)
+        tts.shutdown()
+    }
+}
