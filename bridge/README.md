@@ -19,7 +19,7 @@ Or build it yourself:
 
 ```bash
 cd bridge && go build -o claude-voice-bridge .            # native
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o claude-voice-bridge-arm64 .   # release
+CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -o claude-voice-bridge-arm64 .  # release (Termux/Android)
 ```
 
 Listens on `http://127.0.0.1:8765` (loopback is reachable cross-app on Android,
