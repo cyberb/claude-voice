@@ -15,6 +15,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -105,6 +106,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var usePiper = false
     private var piperVoice: String? = null
     private var player: MediaPlayer? = null
+    private var toneGen: ToneGenerator? = null
+    private var speakStatus = true
     private var busy = false
     private var tokIn = 0
     private var tokOut = 0
@@ -222,6 +225,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 startService(Intent(this, VoiceService::class.java).setAction(VoiceService.ACTION_STOP))
             }
         }
+        findViewById<CheckBox>(R.id.speakStatusBox).setOnCheckedChangeListener { _, checked -> speakStatus = checked }
         findViewById<CheckBox>(R.id.armPtt).setOnCheckedChangeListener { _, checked ->
             getSharedPreferences("cv", MODE_PRIVATE).edit().putBoolean("armed", checked).apply()
         }
@@ -247,7 +251,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts.language = Locale.US
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
-            override fun onDone(utteranceId: String?) { runOnUiThread { setBusy(false); setStatus("ready") } }
+            override fun onDone(utteranceId: String?) { if (utteranceId == "reply") runOnUiThread { setBusy(false); setStatus("ready") } }
             @Deprecated("deprecated") override fun onError(utteranceId: String?) { runOnUiThread { setBusy(false) } }
         })
         runOnUiThread { loadVoices() }
@@ -295,6 +299,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun micColor(res: Int) {
         talk.backgroundTintList = ColorStateList.valueOf(ContextCompat.getColor(this, res))
+    }
+
+    private fun beep(tone: Int) {
+        try {
+            if (toneGen == null) toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
+            toneGen?.startTone(tone, 150)
+        } catch (e: Exception) { }
+    }
+
+    private fun speakCue(word: String) {
+        if (speakStatus) tts.speak(word, TextToSpeech.QUEUE_FLUSH, null, "cue")
     }
 
     private fun setBusy(b: Boolean) {
@@ -574,6 +589,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             )
         } catch (e: SecurityException) { setStatus("microphone unavailable"); return }
         recording.set(true)
+        beep(ToneGenerator.TONE_PROP_BEEP)
         btInputDevice()?.let { try { record.setPreferredDevice(it) } catch (e: Exception) { } }
         micColor(R.color.mic_recording)
         setStatus("listening…")
@@ -593,6 +609,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (!recording.get()) return
         recording.set(false)
         recordThread?.join()
+        beep(ToneGenerator.TONE_PROP_BEEP2)
         val audio = synchronized(pcm) { pcm.toByteArray() }
         if (audio.isEmpty()) { setStatus("nothing recorded"); setBusy(false); return }
         val aid = currentAgentId
@@ -600,11 +617,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val body = wav(audio).toRequestBody("audio/wav".toMediaType())
         setBusy(true)
         setStatus("transcribing…")
+        speakCue("transcribing")
         chatJob = ui.launch {
             val said = post("${base()}/stt", body)
             if (said.isNullOrBlank()) { setStatus("speech-to-text failed"); setBusy(false); return@launch }
             appendYou(said)
             startThinking()
+            speakCue("thinking")
             streamChat(aid, said)
         }
     }
@@ -1051,6 +1070,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onDestroy()
         recording.set(false)
         stopPlayer()
+        toneGen?.release()
         if (::audioManager.isInitialized) audioManager.unregisterAudioDeviceCallback(audioCb)
         tts.shutdown()
     }

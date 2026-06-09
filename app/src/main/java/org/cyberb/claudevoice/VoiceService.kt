@@ -7,9 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.IBinder
 import android.speech.tts.TextToSpeech
@@ -52,6 +54,14 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
     private val pcm = ByteArrayOutputStream()
     private var tts: TextToSpeech? = null
     private var player: MediaPlayer? = null
+    private var toneGen: ToneGenerator? = null
+
+    private fun beep(tone: Int) {
+        try {
+            if (toneGen == null) toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
+            toneGen?.startTone(tone, 150)
+        } catch (e: Exception) { }
+    }
 
     private fun prefs() = getSharedPreferences("cv", MODE_PRIVATE)
     private fun base() = (prefs().getString("bridge", "http://127.0.0.1:8765") ?: "").trimEnd('/')
@@ -96,6 +106,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
             )
         } catch (e: Exception) { notify("mic unavailable"); return }
         recording.set(true)
+        beep(ToneGenerator.TONE_PROP_BEEP)
         notify("listening…")
         recordThread = Thread {
             val buf = ByteArray(minBuf)
@@ -112,11 +123,13 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
         if (!recording.get()) return
         recording.set(false)
         recordThread?.join()
+        beep(ToneGenerator.TONE_PROP_BEEP2)
         val audio = synchronized(pcm) { pcm.toByteArray() }
         if (audio.isEmpty()) { notify("ready"); return }
         val aid = agent()
         if (aid < 0) { notify("no agent — open the app"); return }
         notify("thinking…")
+        tts?.speak("thinking", TextToSpeech.QUEUE_FLUSH, null, "cue")
         scope.launch {
             val said = post("${base()}/stt", wav(audio).toRequestBody("audio/wav".toMediaType()))
             if (said.isNullOrBlank()) { notify("speech-to-text failed"); return@launch }
@@ -256,6 +269,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
         super.onDestroy()
         recording.set(false)
         player?.release(); player = null
+        toneGen?.release()
         tts?.shutdown()
     }
 }

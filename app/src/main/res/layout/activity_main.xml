@@ -209,6 +209,13 @@
             android:layout_marginTop="8dp"
             android:text="@string/use_piper" />
 
+        <CheckBox
+            android:id="@+id/speakStatusBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="@string/speak_status" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
