@@ -1,0 +1,261 @@
+package org.cyberb.claudevoice
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Intent
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaPlayer
+import android.media.MediaRecorder
+import android.os.Build
+import android.os.IBinder
+import android.speech.tts.TextToSpeech
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+class VoiceService : Service(), TextToSpeech.OnInitListener {
+
+    companion object {
+        const val ACTION_START = "start"
+        const val ACTION_TALK_START = "talk_start"
+        const val ACTION_TALK_STOP = "talk_stop"
+        const val ACTION_ARM = "arm_toggle"
+        const val ACTION_STOP = "stop"
+        const val CHANNEL = "voice"
+        const val NOTIF = 1
+    }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val http = OkHttpClient.Builder()
+        .callTimeout(200, TimeUnit.SECONDS).readTimeout(200, TimeUnit.SECONDS).build()
+    private val jsonType = "application/json".toMediaType()
+    private val sampleRate = 16000
+    private val recording = AtomicBoolean(false)
+    private var recordThread: Thread? = null
+    private val pcm = ByteArrayOutputStream()
+    private var tts: TextToSpeech? = null
+    private var player: MediaPlayer? = null
+
+    private fun prefs() = getSharedPreferences("cv", MODE_PRIVATE)
+    private fun base() = (prefs().getString("bridge", "http://127.0.0.1:8765") ?: "").trimEnd('/')
+    private fun agent() = prefs().getInt("agent", -1)
+    private fun usePiper() = prefs().getBoolean("piper", false)
+    private fun piperVoice(): String? = prefs().getString("voice", null)
+    private fun armed() = prefs().getBoolean("armed", false)
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        createChannel()
+        tts = TextToSpeech(this, this)
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) tts?.language = Locale.US
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_TALK_START -> startRec()
+            ACTION_TALK_STOP -> stopRecAndSend()
+            ACTION_ARM -> { prefs().edit().putBoolean("armed", !armed()).apply(); notify("ready") }
+            ACTION_STOP -> { @Suppress("DEPRECATION") stopForeground(true); stopSelf(); return START_NOT_STICKY }
+            else -> startForeground(NOTIF, buildNotif("ready"))
+        }
+        return START_STICKY
+    }
+
+    private fun startRec() {
+        if (recording.get()) return
+        pcm.reset()
+        val minBuf = AudioRecord.getMinBufferSize(
+            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        val rec = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC, sampleRate,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf
+            )
+        } catch (e: Exception) { notify("mic unavailable"); return }
+        recording.set(true)
+        notify("listening…")
+        recordThread = Thread {
+            val buf = ByteArray(minBuf)
+            rec.startRecording()
+            while (recording.get()) {
+                val n = rec.read(buf, 0, buf.size)
+                if (n > 0) synchronized(pcm) { pcm.write(buf, 0, n) }
+            }
+            rec.stop(); rec.release()
+        }.also { it.start() }
+    }
+
+    private fun stopRecAndSend() {
+        if (!recording.get()) return
+        recording.set(false)
+        recordThread?.join()
+        val audio = synchronized(pcm) { pcm.toByteArray() }
+        if (audio.isEmpty()) { notify("ready"); return }
+        val aid = agent()
+        if (aid < 0) { notify("no agent — open the app"); return }
+        notify("thinking…")
+        scope.launch {
+            val said = post("${base()}/stt", wav(audio).toRequestBody("audio/wav".toMediaType()))
+            if (said.isNullOrBlank()) { notify("speech-to-text failed"); return@launch }
+            val payload = JSONObject().put("text", said).put("agent", aid).toString().toRequestBody(jsonType)
+            var replyText = ""
+            var speech = ""
+            withContext(Dispatchers.IO) {
+                try {
+                    http.newCall(Request.Builder().url("${base()}/chat").post(payload).build()).execute().use { r ->
+                        val src = r.body?.source() ?: return@use
+                        while (!src.exhausted()) {
+                            val line = src.readUtf8Line() ?: break
+                            if (line.isBlank()) continue
+                            val o = try { JSONObject(line) } catch (e: Exception) { continue }
+                            if (o.optString("t") == "reply") {
+                                replyText = o.optString("text")
+                                speech = o.optString("speech", "")
+                            }
+                        }
+                    }
+                } catch (e: Exception) { /* dropped */ }
+            }
+            val toSpeak = if (speech.isNotBlank()) speech else clean(replyText)
+            if (toSpeak.isBlank()) { notify("no response"); return@launch }
+            notify("speaking…")
+            speakOut(toSpeak)
+        }
+    }
+
+    private fun speakOut(text: String) {
+        if (usePiper()) {
+            scope.launch {
+                val o = JSONObject().put("text", text)
+                piperVoice()?.let { o.put("voice", it) }
+                val wav = postBytes("${base()}/tts", o.toString().toRequestBody(jsonType))
+                if (wav != null && wav.isNotEmpty()) { playWav(wav); return@launch }
+                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
+                notify("ready")
+            }
+        } else {
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
+            notify("ready")
+        }
+    }
+
+    private fun playWav(wav: ByteArray) {
+        try {
+            val f = File(cacheDir, "svc-reply.wav")
+            f.writeBytes(wav)
+            player?.release()
+            player = MediaPlayer().apply {
+                setDataSource(f.absolutePath)
+                setOnCompletionListener { it.release(); if (player === it) player = null; notify("ready") }
+                prepare(); start()
+            }
+        } catch (e: Exception) { notify("ready") }
+    }
+
+    private suspend fun post(url: String, body: RequestBody): String? = withContext(Dispatchers.IO) {
+        try {
+            http.newCall(Request.Builder().url(url).post(body).build()).execute().use { r ->
+                if (r.isSuccessful) r.body?.string()?.trim() else null
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private suspend fun postBytes(url: String, body: RequestBody): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            http.newCall(Request.Builder().url(url).post(body).build()).execute().use { r ->
+                if (r.isSuccessful) r.body?.bytes() else null
+            }
+        } catch (e: Exception) { null }
+    }
+
+    private fun clean(t: String): String {
+        var s = t
+        s = Regex("```.*?```", RegexOption.DOT_MATCHES_ALL).replace(s, " code block ")
+        s = Regex("`([^`]*)`").replace(s, "$1")
+        s = Regex("\\[([^\\]]+)\\]\\([^)]*\\)").replace(s, "$1")
+        s = Regex("https?://\\S+").replace(s, "link")
+        s = Regex("[#*_>|~]").replace(s, " ")
+        s = Regex("\\s+").replace(s, " ").trim()
+        return s
+    }
+
+    private fun wav(data: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        val byteRate = sampleRate * 2
+        fun le16(v: Int) { out.write(v and 0xff); out.write((v ushr 8) and 0xff) }
+        fun le32(v: Int) {
+            out.write(v and 0xff); out.write((v ushr 8) and 0xff)
+            out.write((v ushr 16) and 0xff); out.write((v ushr 24) and 0xff)
+        }
+        out.write("RIFF".toByteArray()); le32(36 + data.size); out.write("WAVE".toByteArray())
+        out.write("fmt ".toByteArray()); le32(16); le16(1); le16(1)
+        le32(sampleRate); le32(byteRate); le16(2); le16(16)
+        out.write("data".toByteArray()); le32(data.size); out.write(data)
+        return out.toByteArray()
+    }
+
+    private fun createChannel() {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL, "Claude Voice", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+    }
+
+    private fun action(a: String) = PendingIntent.getService(
+        this, a.hashCode(), Intent(this, VoiceService::class.java).setAction(a),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    private fun buildNotif(status: String): Notification {
+        val armLabel = if (armed()) "Disarm" else "Arm vol-up"
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val b = Notification.Builder(this, CHANNEL)
+            .setContentTitle("Claude Voice")
+            .setContentText(status + (if (armed()) "  ·  vol-up armed" else ""))
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setOngoing(true)
+            .setContentIntent(open)
+            .addAction(Notification.Action.Builder(null, armLabel, action(ACTION_ARM)).build())
+            .addAction(Notification.Action.Builder(null, "Stop", action(ACTION_STOP)).build())
+        return b.build()
+    }
+
+    private fun notify(status: String) {
+        getSystemService(NotificationManager::class.java).notify(NOTIF, buildNotif(status))
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        recording.set(false)
+        player?.release(); player = null
+        tts?.shutdown()
+    }
+}

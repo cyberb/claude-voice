@@ -208,5 +208,30 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/use_piper" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="12dp"
+            android:background="#33888888" />
+
+        <CheckBox
+            android:id="@+id/bgMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/background_mode" />
+
+        <CheckBox
+            android:id="@+id/armPtt"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/arm_ptt" />
+
+        <Button
+            android:id="@+id/keySetup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/key_setup" />
     </LinearLayout>
 </androidx.drawerlayout.widget.DrawerLayout>

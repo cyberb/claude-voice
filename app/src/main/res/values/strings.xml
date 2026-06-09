@@ -15,4 +15,8 @@
     <string name="compact_chat">Compact current chat</string>
     <string name="clear_short">clear</string>
     <string name="compact_short">compact</string>
+    <string name="background_mode">Background mode (screen off)</string>
+    <string name="arm_ptt">Volume-up push-to-talk</string>
+    <string name="key_setup">Enable key control (Accessibility)</string>
+    <string name="accessibility_desc">Lets Claude Voice use Volume-Up as a push-to-talk button while the screen is off.</string>
 </resources>

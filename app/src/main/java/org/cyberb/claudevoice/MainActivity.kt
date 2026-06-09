@@ -3,6 +3,7 @@ package org.cyberb.claudevoice
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
+import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -19,6 +20,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
@@ -206,7 +208,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         findViewById<CheckBox>(R.id.piperSwitch).setOnCheckedChangeListener { _, checked ->
             usePiper = checked
+            savePrefs()
             if (checked) loadPiperVoices() else loadVoices()
+        }
+        findViewById<CheckBox>(R.id.bgMode).setOnCheckedChangeListener { _, checked ->
+            if (checked) {
+                savePrefs()
+                if (Build.VERSION.SDK_INT >= 33) {
+                    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+                }
+                ContextCompat.startForegroundService(this, Intent(this, VoiceService::class.java).setAction(VoiceService.ACTION_START))
+            } else {
+                startService(Intent(this, VoiceService::class.java).setAction(VoiceService.ACTION_STOP))
+            }
+        }
+        findViewById<CheckBox>(R.id.armPtt).setOnCheckedChangeListener { _, checked ->
+            getSharedPreferences("cv", MODE_PRIVATE).edit().putBoolean("armed", checked).apply()
+        }
+        findViewById<Button>(R.id.keySetup).setOnClickListener {
+            try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { }
         }
 
         refreshAgents()
@@ -260,7 +280,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             piperVoice = names[0]
             voiceSpinner.adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, names)
             voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { piperVoice = names.getOrNull(pos) }
+                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { piperVoice = names.getOrNull(pos); savePrefs() }
                 override fun onNothingSelected(p: AdapterView<*>?) {}
             }
         }
@@ -513,6 +533,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun updateBottom() {
+        savePrefs()
         val a = agents.firstOrNull { it.id == currentAgentId }
         if (a == null) {
             workdir.text = getString(R.string.no_agent)
@@ -1001,6 +1022,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun micLabel() = if (btInputDevice() != null) "buds" else "phone"
+
+    private fun savePrefs() {
+        getSharedPreferences("cv", MODE_PRIVATE).edit()
+            .putString("bridge", base())
+            .putInt("agent", currentAgentId ?: -1)
+            .putBoolean("piper", usePiper)
+            .putString("voice", piperVoice ?: "")
+            .apply()
+    }
 
     private fun fmtTok(n: Int) = if (n >= 1000) "${n / 1000}k" else "$n"
 
