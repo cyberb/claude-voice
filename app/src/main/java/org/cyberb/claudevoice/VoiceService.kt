@@ -15,12 +15,12 @@ import android.media.ToneGenerator
 import android.media.VolumeProvider
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
-import android.view.KeyEvent
 import android.os.Build
 import android.os.IBinder
 import android.speech.tts.TextToSpeech
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -62,11 +62,26 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
     private var toneGen: ToneGenerator? = null
     private var mediaSession: MediaSession? = null
     private var silent: MediaPlayer? = null
+    private var turnJob: Job? = null
+    @Volatile private var currentCall: okhttp3.Call? = null
 
     private fun trigger() = prefs().getString("trigger", "accessibility") ?: "accessibility"
 
     private fun toggleTalk() {
         if (recording.get()) stopRecAndSend() else startRec()
+    }
+
+    private fun cancelTalk() {
+        recording.set(false)
+        try { recordThread?.join() } catch (e: Exception) { }
+        pcm.reset()
+        currentCall?.cancel()
+        turnJob?.cancel()
+        tts?.stop()
+        try { player?.stop() } catch (e: Exception) { }
+        player?.release(); player = null
+        beep(ToneGenerator.TONE_PROP_NACK)
+        notify("cancelled")
     }
 
     private fun setupTrigger() {
@@ -76,14 +91,10 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
         val s = MediaSession(this, "claudevoice")
         s.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS)
         s.setCallback(object : MediaSession.Callback() {
-            override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
-                val ke = mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? KeyEvent
-                if (ke != null && ke.action == KeyEvent.ACTION_DOWN && ke.repeatCount == 0) { toggleTalk(); return true }
-                return true
-            }
             override fun onPlay() { toggleTalk() }
             override fun onPause() { toggleTalk() }
-            override fun onSkipToNext() { toggleTalk() }
+            override fun onSkipToNext() { cancelTalk() }
+            override fun onSkipToPrevious() { cancelTalk() }
         })
         s.setPlaybackState(
             PlaybackState.Builder()
@@ -200,15 +211,17 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
         if (aid < 0) { notify("no agent — open the app"); return }
         notify("thinking…")
         tts?.speak("thinking", TextToSpeech.QUEUE_FLUSH, null, "cue")
-        scope.launch {
+        turnJob = scope.launch {
             val said = post("${base()}/stt", wav(audio).toRequestBody("audio/wav".toMediaType()))
             if (said.isNullOrBlank()) { notify("speech-to-text failed"); return@launch }
             val payload = JSONObject().put("text", said).put("agent", aid).toString().toRequestBody(jsonType)
             var replyText = ""
             var speech = ""
             withContext(Dispatchers.IO) {
+                val call = http.newCall(Request.Builder().url("${base()}/chat").post(payload).build())
+                currentCall = call
                 try {
-                    http.newCall(Request.Builder().url("${base()}/chat").post(payload).build()).execute().use { r ->
+                    call.execute().use { r ->
                         val src = r.body?.source() ?: return@use
                         while (!src.exhausted()) {
                             val line = src.readUtf8Line() ?: break
@@ -220,7 +233,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
                             }
                         }
                     }
-                } catch (e: Exception) { /* dropped */ }
+                } catch (e: Exception) { /* dropped */ } finally { currentCall = null }
             }
             val toSpeak = if (speech.isNotBlank()) speech else clean(replyText)
             if (toSpeak.isBlank()) { notify("no response"); return@launch }
