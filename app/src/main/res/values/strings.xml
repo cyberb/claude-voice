@@ -8,6 +8,10 @@
     <string name="no_agent">no agent</string>
     <string name="hold_to_talk">Hold the mic to talk</string>
     <string name="open_agents">Open agents</string>
+    <string name="settings">Settings</string>
+    <string name="sec_bridge">Bridge</string>
+    <string name="sec_voice">Voice</string>
+    <string name="sec_handsfree">Hands-free (screen off)</string>
     <string name="voice">Voice</string>
     <string name="stop">Stop</string>
     <string name="use_piper">Use Piper (neural voice)</string>

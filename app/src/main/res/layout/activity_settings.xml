@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/sec_bridge"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/bridgeUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/bridge_hint"
+            android:inputType="textUri"
+            android:textSize="14sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/sec_voice"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <CheckBox
+            android:id="@+id/piperSwitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/use_piper" />
+
+        <Spinner
+            android:id="@+id/voiceSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <CheckBox
+            android:id="@+id/speakStatusBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/speak_status" />
+
+        <CheckBox
+            android:id="@+id/narrateBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/narrate_code" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/sec_handsfree"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <CheckBox
+            android:id="@+id/bgMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/background_mode" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/trigger_label"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/triggerGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <RadioButton
+                android:id="@+id/trigAcc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/trig_acc" />
+
+            <RadioButton
+                android:id="@+id/trigMsVol"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/trig_msvol" />
+
+            <RadioButton
+                android:id="@+id/trigMedia"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/trig_media" />
+        </RadioGroup>
+
+        <Button
+            android:id="@+id/keySetup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/key_setup" />
+    </LinearLayout>
+</ScrollView>

@@ -99,20 +99,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var status: TextView
     private lateinit var workdir: TextView
     private lateinit var branch: TextView
-    private lateinit var bridgeUrl: EditText
     private lateinit var agentList: ListView
     private lateinit var serverStatus: TextView
-    private lateinit var voiceSpinner: Spinner
-    private lateinit var narrateBox: CheckBox
     private lateinit var talk: FloatingActionButton
-    private val voices = mutableListOf<Voice>()
     private var chatJob: Job? = null
     @Volatile private var currentCall: okhttp3.Call? = null
-    private var usePiper = false
-    private var piperVoice: String? = null
     private var player: MediaPlayer? = null
     private var toneGen: ToneGenerator? = null
-    private var speakStatus = true
+
+    private fun cvPrefs() = getSharedPreferences("cv", MODE_PRIVATE)
+    private fun usePiper() = cvPrefs().getBoolean("piper", false)
+    private fun speakStatusOn() = cvPrefs().getBoolean("speakStatus", true)
+    private fun piperVoice(): String? = cvPrefs().getString("voice", null)?.ifBlank { null }
     private val eventReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val type = intent?.getStringExtra("type") ?: return
@@ -164,10 +162,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         status = findViewById(R.id.status)
         workdir = findViewById(R.id.workdir)
         branch = findViewById(R.id.branch)
-        bridgeUrl = findViewById(R.id.bridgeUrl)
         agentList = findViewById(R.id.agentList)
         serverStatus = findViewById(R.id.serverStatus)
-        voiceSpinner = findViewById(R.id.voiceSpinner)
         talk = findViewById(R.id.talk)
 
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
@@ -230,42 +226,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 setStatus("compacted")
             }
         }
-        findViewById<CheckBox>(R.id.piperSwitch).setOnCheckedChangeListener { _, checked ->
-            usePiper = checked
-            savePrefs()
-            if (checked) loadPiperVoices() else loadVoices()
-        }
-        findViewById<CheckBox>(R.id.bgMode).setOnCheckedChangeListener { _, checked ->
-            getSharedPreferences("cv", MODE_PRIVATE).edit().putBoolean("running", checked).apply()
-            if (checked) {
-                savePrefs()
-                if (Build.VERSION.SDK_INT >= 33) {
-                    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
-                }
-                ContextCompat.startForegroundService(this, Intent(this, VoiceService::class.java).setAction(VoiceService.ACTION_START))
-            } else {
-                startService(Intent(this, VoiceService::class.java).setAction(VoiceService.ACTION_STOP))
-            }
-        }
-        findViewById<CheckBox>(R.id.speakStatusBox).setOnCheckedChangeListener { _, checked -> speakStatus = checked }
-        narrateBox = findViewById(R.id.narrateBox)
-        narrateBox.setOnCheckedChangeListener { _, checked ->
-            val aid = currentAgentId ?: return@setOnCheckedChangeListener
-            getSharedPreferences("cv", MODE_PRIVATE).edit().putBoolean("narrate_$aid", checked).apply()
-        }
-        findViewById<RadioGroup>(R.id.triggerGroup).setOnCheckedChangeListener { _, id ->
-            val t = when (id) {
-                R.id.trigMsVol -> "msvolume"
-                R.id.trigMedia -> "mediabutton"
-                else -> "accessibility"
-            }
-            getSharedPreferences("cv", MODE_PRIVATE).edit().putString("trigger", t).apply()
-            if (getSharedPreferences("cv", MODE_PRIVATE).getBoolean("running", false)) {
-                ContextCompat.startForegroundService(this, Intent(this, VoiceService::class.java).setAction(VoiceService.ACTION_RECONFIG))
-            }
-        }
-        findViewById<Button>(R.id.keySetup).setOnClickListener {
-            try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { }
+        findViewById<Button>(R.id.openSettings).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
 
         refreshAgents()
@@ -274,6 +236,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onResume() {
         super.onResume()
         startPolling()
+        applyTtsVoice()
     }
 
     override fun onPause() {
@@ -289,47 +252,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             override fun onDone(utteranceId: String?) { if (utteranceId == "reply") runOnUiThread { setBusy(false); setStatus("ready") } }
             @Deprecated("deprecated") override fun onError(utteranceId: String?) { runOnUiThread { setBusy(false) } }
         })
-        runOnUiThread { loadVoices() }
+        runOnUiThread { applyTtsVoice() }
     }
 
-    private fun loadVoices() {
-        val all = try { tts.voices?.toList() ?: emptyList() } catch (e: Exception) { emptyList() }
-        val list = all.filter { it.locale.language == "en" }
-            .sortedWith(compareByDescending<Voice> { it.quality }.thenBy { it.locale.toString() }.thenBy { it.name })
-            .take(3)
-        voices.clear(); voices.addAll(list)
-        val labels = voices.map { v ->
-            "${v.locale.displayName} ${stars(v.quality)}${if (v.isNetworkConnectionRequired) " (net)" else ""}"
-        }
-        voiceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
-        voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
-                voices.getOrNull(pos)?.let { tts.voice = it }
-            }
-            override fun onNothingSelected(p: AdapterView<*>?) {}
-        }
-    }
-
-    private fun loadPiperVoices() {
-        ui.launch {
-            val s = httpGet("${base()}/voices") ?: return@launch
-            val arr = try { JSONArray(s) } catch (e: Exception) { return@launch }
-            val names = (0 until arr.length()).map { arr.getString(it) }
-            if (names.isEmpty()) { setStatus("no piper voices installed"); return@launch }
-            piperVoice = names[0]
-            voiceSpinner.adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, names)
-            voiceSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) { piperVoice = names.getOrNull(pos); savePrefs() }
-                override fun onNothingSelected(p: AdapterView<*>?) {}
-            }
-        }
-    }
-
-    private fun stars(q: Int) = when {
-        q >= Voice.QUALITY_VERY_HIGH -> "★★★"
-        q >= Voice.QUALITY_HIGH -> "★★"
-        q >= Voice.QUALITY_NORMAL -> "★"
-        else -> "·"
+    private fun applyTtsVoice() {
+        if (!::tts.isInitialized) return
+        val name = cvPrefs().getString("ttsVoice", null) ?: return
+        try { tts.voices?.firstOrNull { it.name == name }?.let { tts.voice = it } } catch (e: Exception) { }
     }
 
     private fun micColor(res: Int) {
@@ -344,7 +273,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speakCue(word: String) {
-        if (speakStatus) tts.speak(word, TextToSpeech.QUEUE_FLUSH, null, "cue")
+        if (speakStatusOn()) tts.speak(word, TextToSpeech.QUEUE_FLUSH, null, "cue")
     }
 
     private fun setBusy(b: Boolean) {
@@ -585,16 +514,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun refreshNarrateBox() {
-        if (!::narrateBox.isInitialized) return
-        val aid = currentAgentId ?: return
-        val v = getSharedPreferences("cv", MODE_PRIVATE).getBoolean("narrate_$aid", false)
-        if (narrateBox.isChecked != v) narrateBox.isChecked = v
-    }
-
     private fun updateBottom() {
         savePrefs()
-        refreshNarrateBox()
         val a = agents.firstOrNull { it.id == currentAgentId }
         if (a == null) {
             workdir.text = getString(R.string.no_agent)
@@ -720,7 +641,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 setStatus("speaking…")
                 val narration = o.optString("speech", "")
                 val speech = if (narration.isNotBlank()) narration else forSpeech(text)
-                if (usePiper) speakPiper(speech) else tts.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "reply")
+                if (usePiper()) speakPiper(speech) else tts.speak(speech, TextToSpeech.QUEUE_FLUSH, null, "reply")
             }
         }
     }
@@ -759,7 +680,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private suspend fun ttsBytes(text: String): ByteArray? {
         val o = JSONObject().put("text", text)
-        piperVoice?.let { o.put("voice", it) }
+        piperVoice()?.let { o.put("voice", it) }
         return postBytes("${base()}/tts", o.toString().toRequestBody(jsonType))
     }
 
@@ -852,7 +773,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         return out.toString()
     }
 
-    private fun base() = bridgeUrl.text.toString().trim().trimEnd('/')
+    private fun base() = (cvPrefs().getString("bridge", "http://127.0.0.1:8765") ?: "").trim().trimEnd('/')
 
     private suspend fun httpGet(url: String): String? = withContext(Dispatchers.IO) {
         try {
@@ -1087,10 +1008,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun savePrefs() {
         getSharedPreferences("cv", MODE_PRIVATE).edit()
-            .putString("bridge", base())
             .putInt("agent", currentAgentId ?: -1)
-            .putBoolean("piper", usePiper)
-            .putString("voice", piperVoice ?: "")
             .apply()
     }
 

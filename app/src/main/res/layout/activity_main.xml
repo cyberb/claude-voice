@@ -174,103 +174,11 @@
             android:layout_height="wrap_content"
             android:text="@string/add_agent" />
 
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="12dp"
-            android:layout_marginBottom="12dp"
-            android:background="#33888888" />
-
-        <EditText
-            android:id="@+id/bridgeUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/bridge_hint"
-            android:inputType="textUri"
-            android:text="http://127.0.0.1:8765"
-            android:textSize="13sp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/voice"
-            android:textStyle="bold" />
-
-        <Spinner
-            android:id="@+id/voiceSpinner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-
-        <CheckBox
-            android:id="@+id/piperSwitch"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/use_piper" />
-
-        <CheckBox
-            android:id="@+id/speakStatusBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:checked="true"
-            android:text="@string/speak_status" />
-
-        <CheckBox
-            android:id="@+id/narrateBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/narrate_code" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginTop="12dp"
-            android:layout_marginBottom="12dp"
-            android:background="#33888888" />
-
-        <CheckBox
-            android:id="@+id/bgMode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/background_mode" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:text="@string/trigger_label"
-            android:textStyle="bold" />
-
-        <RadioGroup
-            android:id="@+id/triggerGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content">
-
-            <RadioButton
-                android:id="@+id/trigAcc"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:checked="true"
-                android:text="@string/trig_acc" />
-
-            <RadioButton
-                android:id="@+id/trigMsVol"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/trig_msvol" />
-
-            <RadioButton
-                android:id="@+id/trigMedia"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="@string/trig_media" />
-        </RadioGroup>
-
         <Button
-            android:id="@+id/keySetup"
+            android:id="@+id/openSettings"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/key_setup" />
+            android:layout_marginTop="12dp"
+            android:text="@string/settings" />
     </LinearLayout>
 </androidx.drawerlayout.widget.DrawerLayout>
