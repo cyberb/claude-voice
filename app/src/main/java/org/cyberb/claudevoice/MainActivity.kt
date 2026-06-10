@@ -42,6 +42,7 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
@@ -215,6 +216,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (checked) loadPiperVoices() else loadVoices()
         }
         findViewById<CheckBox>(R.id.bgMode).setOnCheckedChangeListener { _, checked ->
+            getSharedPreferences("cv", MODE_PRIVATE).edit().putBoolean("running", checked).apply()
             if (checked) {
                 savePrefs()
                 if (Build.VERSION.SDK_INT >= 33) {
@@ -226,8 +228,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
         findViewById<CheckBox>(R.id.speakStatusBox).setOnCheckedChangeListener { _, checked -> speakStatus = checked }
-        findViewById<CheckBox>(R.id.armPtt).setOnCheckedChangeListener { _, checked ->
-            getSharedPreferences("cv", MODE_PRIVATE).edit().putBoolean("armed", checked).apply()
+        findViewById<RadioGroup>(R.id.triggerGroup).setOnCheckedChangeListener { _, id ->
+            val t = when (id) {
+                R.id.trigMsVol -> "msvolume"
+                R.id.trigMedia -> "mediabutton"
+                else -> "accessibility"
+            }
+            getSharedPreferences("cv", MODE_PRIVATE).edit().putString("trigger", t).apply()
+            if (getSharedPreferences("cv", MODE_PRIVATE).getBoolean("running", false)) {
+                ContextCompat.startForegroundService(this, Intent(this, VoiceService::class.java).setAction(VoiceService.ACTION_RECONFIG))
+            }
         }
         findViewById<Button>(R.id.keySetup).setOnClickListener {
             try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { }

@@ -229,11 +229,37 @@
             android:layout_height="wrap_content"
             android:text="@string/background_mode" />
 
-        <CheckBox
-            android:id="@+id/armPtt"
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/arm_ptt" />
+            android:layout_marginTop="6dp"
+            android:text="@string/trigger_label"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/triggerGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <RadioButton
+                android:id="@+id/trigAcc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="@string/trig_acc" />
+
+            <RadioButton
+                android:id="@+id/trigMsVol"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/trig_msvol" />
+
+            <RadioButton
+                android:id="@+id/trigMedia"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/trig_media" />
+        </RadioGroup>
 
         <Button
             android:id="@+id/keySetup"

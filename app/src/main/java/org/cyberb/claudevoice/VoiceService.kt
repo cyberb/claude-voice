@@ -12,6 +12,10 @@ import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.media.VolumeProvider
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.view.KeyEvent
 import android.os.Build
 import android.os.IBinder
 import android.speech.tts.TextToSpeech
@@ -39,6 +43,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_TALK_START = "talk_start"
         const val ACTION_TALK_STOP = "talk_stop"
         const val ACTION_ARM = "arm_toggle"
+        const val ACTION_RECONFIG = "reconfig"
         const val ACTION_STOP = "stop"
         const val CHANNEL = "voice"
         const val NOTIF = 1
@@ -55,6 +60,70 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var player: MediaPlayer? = null
     private var toneGen: ToneGenerator? = null
+    private var mediaSession: MediaSession? = null
+    private var silent: MediaPlayer? = null
+
+    private fun trigger() = prefs().getString("trigger", "accessibility") ?: "accessibility"
+
+    private fun toggleTalk() {
+        if (recording.get()) stopRecAndSend() else startRec()
+    }
+
+    private fun setupTrigger() {
+        teardownTrigger()
+        val t = trigger()
+        if (t != "msvolume" && t != "mediabutton") return
+        val s = MediaSession(this, "claudevoice")
+        s.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS)
+        s.setCallback(object : MediaSession.Callback() {
+            override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+                val ke = mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? KeyEvent
+                if (ke != null && ke.action == KeyEvent.ACTION_DOWN && ke.repeatCount == 0) { toggleTalk(); return true }
+                return true
+            }
+            override fun onPlay() { toggleTalk() }
+            override fun onPause() { toggleTalk() }
+            override fun onSkipToNext() { toggleTalk() }
+        })
+        s.setPlaybackState(
+            PlaybackState.Builder()
+                .setActions(
+                    PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                        PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SKIP_TO_NEXT
+                )
+                .setState(PlaybackState.STATE_PLAYING, 0, 1f).build()
+        )
+        if (t == "msvolume") {
+            s.setPlaybackToRemote(object : VolumeProvider(VolumeProvider.VOLUME_CONTROL_RELATIVE, 100, 50) {
+                override fun onAdjustVolume(direction: Int) { if (direction > 0) toggleTalk() }
+            })
+        }
+        s.isActive = true
+        mediaSession = s
+        startSilent()
+    }
+
+    private fun teardownTrigger() {
+        try { mediaSession?.isActive = false; mediaSession?.release() } catch (e: Exception) { }
+        mediaSession = null
+        stopSilent()
+    }
+
+    private fun startSilent() {
+        try {
+            val f = File(cacheDir, "silent.wav")
+            f.writeBytes(wav(ByteArray(sampleRate)))
+            silent?.release()
+            silent = MediaPlayer().apply {
+                setDataSource(f.absolutePath); isLooping = true; setVolume(0f, 0f); prepare(); start()
+            }
+        } catch (e: Exception) { }
+    }
+
+    private fun stopSilent() {
+        try { silent?.release() } catch (e: Exception) { }
+        silent = null
+    }
 
     private fun beep(tone: Int) {
         try {
@@ -87,8 +156,9 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
             ACTION_TALK_START -> startRec()
             ACTION_TALK_STOP -> stopRecAndSend()
             ACTION_ARM -> { prefs().edit().putBoolean("armed", !armed()).apply(); notify("ready") }
-            ACTION_STOP -> { @Suppress("DEPRECATION") stopForeground(true); stopSelf(); return START_NOT_STICKY }
-            else -> startForeground(NOTIF, buildNotif("ready"))
+            ACTION_RECONFIG -> setupTrigger()
+            ACTION_STOP -> { teardownTrigger(); @Suppress("DEPRECATION") stopForeground(true); stopSelf(); return START_NOT_STICKY }
+            else -> { startForeground(NOTIF, buildNotif("ready")); setupTrigger() }
         }
         return START_STICKY
     }
@@ -268,6 +338,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         super.onDestroy()
         recording.set(false)
+        teardownTrigger()
         player?.release(); player = null
         toneGen?.release()
         tts?.shutdown()

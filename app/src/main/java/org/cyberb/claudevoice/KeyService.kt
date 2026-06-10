@@ -12,8 +12,9 @@ class KeyService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode != KeyEvent.KEYCODE_VOLUME_UP) return false
-        val armed = getSharedPreferences("cv", MODE_PRIVATE).getBoolean("armed", false)
-        if (!armed) return false
+        val p = getSharedPreferences("cv", MODE_PRIVATE)
+        if (p.getString("trigger", "accessibility") != "accessibility") return false
+        if (!p.getBoolean("running", false)) return false
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
                 if (event.repeatCount == 0) send(VoiceService.ACTION_TALK_START)
