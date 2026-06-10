@@ -217,7 +217,8 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
             val said = post("${base()}/stt", wav(audio).toRequestBody("audio/wav".toMediaType()))
             if (said.isNullOrBlank()) { notify("speech-to-text failed"); return@launch }
             broadcast("you", said)
-            val payload = JSONObject().put("text", said).put("agent", aid).toString().toRequestBody(jsonType)
+            val narrate = prefs().getBoolean("narrate_$aid", false)
+            val payload = JSONObject().put("text", said).put("agent", aid).put("narrate", narrate).toString().toRequestBody(jsonType)
             var replyText = ""
             var speech = ""
             withContext(Dispatchers.IO) {

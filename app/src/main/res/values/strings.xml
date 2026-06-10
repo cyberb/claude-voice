@@ -12,6 +12,7 @@
     <string name="stop">Stop</string>
     <string name="use_piper">Use Piper (neural voice)</string>
     <string name="speak_status">Speak activity (transcribing, thinking)</string>
+    <string name="narrate_code">Narrate code aloud (this agent)</string>
     <string name="clear_chat">Clear current chat</string>
     <string name="compact_chat">Compact current chat</string>
     <string name="clear_short">clear</string>

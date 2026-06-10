@@ -828,8 +828,9 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var p struct {
-		Text  string `json:"text"`
-		Agent *int   `json:"agent"`
+		Text    string `json:"text"`
+		Agent   *int   `json:"agent"`
+		Narrate *bool  `json:"narrate"`
 	}
 	json.NewDecoder(r.Body).Decode(&p)
 	id := 0
@@ -864,7 +865,11 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	if resume != "" {
 		args = append(args, "--resume", resume)
 	}
-	if narrateOn {
+	doNarrate := narrateOn
+	if p.Narrate != nil {
+		doNarrate = *p.Narrate
+	}
+	if doNarrate {
 		args = append(args, "--append-system-prompt", narrateSystem)
 	}
 	args = append(args, "--permission-mode", perm, p.Text)

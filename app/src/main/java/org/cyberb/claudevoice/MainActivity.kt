@@ -103,6 +103,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var agentList: ListView
     private lateinit var serverStatus: TextView
     private lateinit var voiceSpinner: Spinner
+    private lateinit var narrateBox: CheckBox
     private lateinit var talk: FloatingActionButton
     private val voices = mutableListOf<Voice>()
     private var chatJob: Job? = null
@@ -144,8 +145,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var agentsSig = ""
     private lateinit var audioManager: AudioManager
     private val audioCb = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) { updateStatusLine() }
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) { updateStatusLine() }
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) { updateBottom() }
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) { updateBottom() }
     }
 
     private val agents = mutableListOf<Agent>()
@@ -247,6 +248,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
         findViewById<CheckBox>(R.id.speakStatusBox).setOnCheckedChangeListener { _, checked -> speakStatus = checked }
+        narrateBox = findViewById(R.id.narrateBox)
+        narrateBox.setOnCheckedChangeListener { _, checked ->
+            val aid = currentAgentId ?: return@setOnCheckedChangeListener
+            getSharedPreferences("cv", MODE_PRIVATE).edit().putBoolean("narrate_$aid", checked).apply()
+        }
         findViewById<RadioGroup>(R.id.triggerGroup).setOnCheckedChangeListener { _, id ->
             val t = when (id) {
                 R.id.trigMsVol -> "msvolume"
@@ -579,8 +585,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
+    private fun refreshNarrateBox() {
+        if (!::narrateBox.isInitialized) return
+        val aid = currentAgentId ?: return
+        val v = getSharedPreferences("cv", MODE_PRIVATE).getBoolean("narrate_$aid", false)
+        if (narrateBox.isChecked != v) narrateBox.isChecked = v
+    }
+
     private fun updateBottom() {
         savePrefs()
+        refreshNarrateBox()
         val a = agents.firstOrNull { it.id == currentAgentId }
         if (a == null) {
             workdir.text = getString(R.string.no_agent)
@@ -588,14 +602,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
         workdir.text = shortPath(a.dir)
-        if (a.branch != null) {
-            branch.visibility = View.VISIBLE
-            branch.text = a.branch + if (a.dirty) " ✗" else ""
-            branch.setTextColor(ContextCompat.getColor(this,
-                if (a.dirty) R.color.branch_dirty else R.color.branch_text))
-        } else {
-            branch.visibility = View.GONE
-        }
+        val b = a.branch?.let { it + if (a.dirty) " ✗" else "" } ?: ""
+        branch.visibility = View.VISIBLE
+        branch.text = (b + "   🎙 " + micLabel()).trim()
+        branch.setTextColor(ContextCompat.getColor(this,
+            if (a.dirty) R.color.branch_dirty else R.color.branch_text))
     }
 
     private fun shortPath(dir: String): String {
@@ -661,7 +672,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private suspend fun streamChat(aid: Int, text: String) {
-        val payload = JSONObject().put("text", text).put("agent", aid).toString().toRequestBody(jsonType)
+        val narrate = getSharedPreferences("cv", MODE_PRIVATE).getBoolean("narrate_$aid", false)
+        val payload = JSONObject().put("text", text).put("agent", aid).put("narrate", narrate).toString().toRequestBody(jsonType)
         var sawReply = false
         withContext(Dispatchers.IO) {
             val call = http.newCall(Request.Builder().url("${base()}/chat").post(payload).build())
@@ -1058,7 +1070,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (tokIn > 0 || tokOut > 0) {
             sb.append("   ↑").append(fmtTok(tokIn)).append(" ↓").append(fmtTok(tokOut))
         }
-        sb.append("   🎙 ").append(micLabel())
         status.text = sb.toString()
     }
 

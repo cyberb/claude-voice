@@ -216,6 +216,12 @@
             android:checked="true"
             android:text="@string/speak_status" />
 
+        <CheckBox
+            android:id="@+id/narrateBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/narrate_code" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
