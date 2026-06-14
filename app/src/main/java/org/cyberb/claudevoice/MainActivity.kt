@@ -66,16 +66,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 data class Agent(val id: Int, val name: String, val dir: String, val branch: String?, val dirty: Boolean, val exists: Boolean)
@@ -83,12 +79,8 @@ data class Agent(val id: Int, val name: String, val dir: String, val branch: Str
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private val sampleRate = 16000
-    private val jsonType = "application/json".toMediaType()
     private val ui = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val http = OkHttpClient.Builder()
-        .callTimeout(200, TimeUnit.SECONDS)
-        .readTimeout(200, TimeUnit.SECONDS)
-        .build()
+    internal var http = BridgeHttp()
 
     private val recording = AtomicBoolean(false)
     private var recordThread: Thread? = null
@@ -106,7 +98,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var serverStatus: TextView
     private lateinit var talk: FloatingActionButton
     private var chatJob: Job? = null
-    @Volatile private var currentCall: okhttp3.Call? = null
     private var player: MediaPlayer? = null
     private var toneGen: ToneGenerator? = null
 
@@ -248,7 +239,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun clearAgent() {
         val id = currentAgentId ?: return
         ui.launch {
-            post("${base()}/agents/$id/clear", "{}".toRequestBody(jsonType))
+            http.post("${base()}/agents/$id/clear", "{}".toRequestBody(http.jsonType))
             transcripts.remove(id)
             ctxByAgent.remove(id)
             tokIn = 0; tokOut = 0
@@ -266,7 +257,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         setBusy(true)
         startTimer("compacting…")
         chatJob = ui.launch {
-            val s = post("${base()}/agents/$id/compact", "{}".toRequestBody(jsonType))
+            val s = http.post("${base()}/agents/$id/compact", "{}".toRequestBody(http.jsonType))
             stopThinking()
             setBusy(false)
             if (s == null) { setStatus("compact failed"); return@launch }
@@ -330,7 +321,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts.stop()
         stopPlayer()
         stopThinking()
-        currentCall?.cancel()
+        http.cancel()
         chatJob?.cancel()
         recording.set(false)
         setBusy(false)
@@ -341,7 +332,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun refreshAgents() = ui.launch {
-        val s = httpGet("${base()}/agents") ?: run { setStatus("no bridge at ${base()}"); return@launch }
+        val s = http.get("${base()}/agents") ?: run { setStatus("no bridge at ${base()}"); return@launch }
         setAgents(parseAgents(s))
         if (currentAgentId == null || agents.none { it.id == currentAgentId }) {
             currentAgentId = agents.firstOrNull()?.id
@@ -358,10 +349,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun healthCheck() = ui.launch {
-        val ok = httpGet("${base()}/health") == "ok"
+        val ok = http.get("${base()}/health") == "ok"
         setServerUp(ok)
         if (!ok) return@launch
-        val s = httpGet("${base()}/agents") ?: return@launch
+        val s = http.get("${base()}/agents") ?: return@launch
         val list = parseAgents(s)
         val sig = list.joinToString("|") { "${it.id}:${it.branch}:${it.dirty}:${it.exists}" }
         if (sig != agentsSig) {
@@ -400,7 +391,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             .setMessage("Remove “${a.name}”? This just stops tracking it — the directory and its files are untouched.")
             .setPositiveButton("Remove") { _, _ ->
                 ui.launch {
-                    val s = httpDelete("${base()}/agents/${a.id}") ?: run { setStatus("remove failed"); return@launch }
+                    val s = http.delete("${base()}/agents/${a.id}") ?: run { setStatus("remove failed"); return@launch }
                     transcripts.remove(a.id)
                     ctxByAgent.remove(a.id)
                     setAgents(parseAgents(s))
@@ -467,7 +458,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         fun load(dir: String) {
             ui.launch {
-                val s = httpGet("${base()}/ls?dir=" + Uri.encode(dir)) ?: run { setStatus("cannot list folder"); return@launch }
+                val s = http.get("${base()}/ls?dir=" + Uri.encode(dir)) ?: run { setStatus("cannot list folder"); return@launch }
                 val o = JSONObject(s)
                 browseDir = o.getString("dir")
                 pathView.text = browseDir
@@ -497,7 +488,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun openSessionPicker(dir: String) {
         ui.launch {
-            val s = httpGet("${base()}/sessions?dir=" + Uri.encode(dir))
+            val s = http.get("${base()}/sessions?dir=" + Uri.encode(dir))
             val ids = ArrayList<String>()
             val labels = ArrayList<String>()
             labels.add("✨  New session")
@@ -526,7 +517,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         ui.launch {
             val payload = JSONObject().put("dir", dir)
             if (session != null) payload.put("session", session)
-            val s = post("${base()}/agents", payload.toString().toRequestBody(jsonType))
+            val s = http.post("${base()}/agents", payload.toString().toRequestBody(http.jsonType))
             if (s == null) { setStatus("add agent failed"); return@launch }
             setAgents(parseAgents(s))
             agentsSig = ""
@@ -535,7 +526,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (session != null && id != null) {
                 val buf = SpannableStringBuilder()
                 transcripts[id] = buf
-                val h = httpGet("${base()}/history?dir=" + Uri.encode(dir) + "&id=" + Uri.encode(session))
+                val h = http.get("${base()}/history?dir=" + Uri.encode(dir) + "&id=" + Uri.encode(session))
                 if (h != null) {
                     try {
                         val arr = JSONArray(h)
@@ -628,7 +619,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         setStatus("transcribing…")
         speakCue("transcribing")
         chatJob = ui.launch {
-            val said = post("${base()}/stt", body)
+            val said = http.post("${base()}/stt", body)
             if (said.isNullOrBlank()) { setStatus("speech-to-text failed"); setBusy(false); return@launch }
             appendYou(said)
             startThinking()
@@ -638,32 +629,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private suspend fun streamChat(aid: Int, text: String) {
-        val narrate = getSharedPreferences("cv", MODE_PRIVATE).getBoolean("narrate_$aid", false)
-        val payload = JSONObject().put("text", text).put("agent", aid).put("narrate", narrate).toString().toRequestBody(jsonType)
+        val narrate = cvPrefs().getBoolean("narrate_$aid", false)
+        val payload = JSONObject().put("text", text).put("agent", aid).put("narrate", narrate).toString().toRequestBody(http.jsonType)
         var sawReply = false
-        withContext(Dispatchers.IO) {
-            val call = http.newCall(Request.Builder().url("${base()}/chat").post(payload).build())
-            currentCall = call
-            try {
-                call.execute().use { r ->
-                    val src = r.body?.source()
-                    if (!r.isSuccessful || src == null) {
-                        withContext(Dispatchers.Main) { stopThinking(); setStatus("agent failed"); setBusy(false) }
-                        return@use
-                    }
-                    while (!src.exhausted()) {
-                        val line = src.readUtf8Line() ?: break
-                        if (line.isBlank()) continue
-                        val o = try { JSONObject(line) } catch (e: Exception) { continue }
-                        if (o.optString("t") == "reply") sawReply = true
-                        withContext(Dispatchers.Main) { handleEvent(o) }
-                    }
-                }
-            } catch (e: Exception) {
-                // cancelled or dropped connection
-            } finally { currentCall = null }
+        val ok = http.stream("${base()}/chat", payload) { line ->
+            val o = try { JSONObject(line) } catch (e: Exception) { return@stream }
+            if (o.optString("t") == "reply") sawReply = true
+            withContext(Dispatchers.Main) { handleEvent(o) }
         }
-        if (!sawReply && busy) { stopThinking(); setStatus("agent failed"); setBusy(false) }
+        if ((!ok || !sawReply) && busy) { stopThinking(); setStatus("agent failed"); setBusy(false) }
     }
 
     private fun handleEvent(o: JSONObject) {
@@ -731,7 +705,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private suspend fun ttsBytes(text: String): ByteArray? {
         val o = JSONObject().put("text", text)
         piperVoice()?.let { o.put("voice", it) }
-        return postBytes("${base()}/tts", o.toString().toRequestBody(jsonType))
+        return http.postBytes("${base()}/tts", o.toString().toRequestBody(http.jsonType))
     }
 
     private suspend fun playWavAwait(wav: ByteArray) = suspendCancellableCoroutine<Unit> { cont ->
@@ -824,40 +798,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun base() = (cvPrefs().getString("bridge", "http://127.0.0.1:8765") ?: "").trim().trimEnd('/')
-
-    private suspend fun httpGet(url: String): String? = withContext(Dispatchers.IO) {
-        try {
-            http.newCall(Request.Builder().url(url).get().build()).execute().use { r ->
-                if (r.isSuccessful) r.body?.string()?.trim() else null
-            }
-        } catch (e: Exception) { null }
-    }
-
-    private suspend fun httpDelete(url: String): String? = withContext(Dispatchers.IO) {
-        try {
-            http.newCall(Request.Builder().url(url).delete().build()).execute().use { r ->
-                if (r.isSuccessful) r.body?.string()?.trim() else null
-            }
-        } catch (e: Exception) { null }
-    }
-
-    private suspend fun post(url: String, body: RequestBody): String? = withContext(Dispatchers.IO) {
-        val call = http.newCall(Request.Builder().url(url).post(body).build())
-        currentCall = call
-        try {
-            call.execute().use { r ->
-                if (r.isSuccessful) r.body?.string()?.trim() else null
-            }
-        } catch (e: Exception) { null } finally { currentCall = null }
-    }
-
-    private suspend fun postBytes(url: String, body: RequestBody): ByteArray? = withContext(Dispatchers.IO) {
-        val call = http.newCall(Request.Builder().url(url).post(body).build())
-        currentCall = call
-        try {
-            call.execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
-        } catch (e: Exception) { null } finally { currentCall = null }
-    }
 
     private fun wav(data: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
