@@ -64,12 +64,21 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
-data class Agent(val id: Int, val name: String, val dir: String, val branch: String?, val dirty: Boolean, val exists: Boolean)
+@Serializable
+data class Agent(
+    val id: Int,
+    val name: String = "",
+    val dir: String = "",
+    val branch: String? = null,
+    val dirty: Boolean = false,
+    val exists: Boolean = true,
+)
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
