@@ -3,18 +3,9 @@ package org.cyberb.claudevoice
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.res.ColorStateList
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
-import android.text.Spannable
-import android.text.SpannableString
 import android.text.SpannableStringBuilder
-import android.text.style.ForegroundColorSpan
-import android.text.style.LineBackgroundSpan
-import android.text.style.StyleSpan
-import android.text.style.TypefaceSpan
 import android.view.MotionEvent
 import android.view.View
 import android.widget.PopupMenu
@@ -42,6 +33,8 @@ class MainView(private val host: VoiceHost, root: View) {
     private val workdir: TextView = root.findViewById(R.id.workdir)
     private val branch: TextView = root.findViewById(R.id.branch)
     private val talk: FloatingActionButton = root.findViewById(R.id.talk)
+
+    private val fmt = TextFormat(activity)
 
     private val audio = AudioEngine(
         host,
@@ -155,7 +148,7 @@ class MainView(private val host: VoiceHost, root: View) {
             stopThinking()
             setBusy(false)
             if (!ok) { setStatus("compact failed"); return@launch }
-            appendSpan(colored("— conversation compacted —\n\n", R.color.action_text, italic = true))
+            appendSpan(fmt.colored("— conversation compacted —\n\n", R.color.action_text, italic = true))
             host.ctxByAgent.remove(id)
             tokIn = 0; tokOut = 0
             updateBottom()
@@ -301,141 +294,13 @@ class MainView(private val host: VoiceHost, root: View) {
         }
     }
 
-    private fun colored(text: String, colorRes: Int, mono: Boolean = false, italic: Boolean = false): SpannableString {
-        val s = SpannableString(text)
-        s.setSpan(ForegroundColorSpan(ContextCompat.getColor(activity, colorRes)), 0, s.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-        if (mono) s.setSpan(TypefaceSpan("monospace"), 0, s.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-        if (italic) s.setSpan(StyleSpan(Typeface.ITALIC), 0, s.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-        return s
-    }
+    private fun appendYou(text: String) = appendSpan(fmt.you(text))
 
-    private fun appendYou(text: String) {
-        appendSpan(colored("you  ", R.color.branch_text))
-        appendSpan("$text\n\n")
-    }
+    private fun appendReply(text: String) = appendSpan(fmt.reply(text))
 
-    private fun stripInline(t: String): String {
-        var s = t
-        s = Regex("`([^`]*)`").replace(s, "$1")
-        s = Regex("\\[([^\\]]+)\\]\\([^)]*\\)").replace(s, "$1")
-        s = Regex("^\\s{0,3}[-*+]\\s+", RegexOption.MULTILINE).replace(s, "• ")
-        s = Regex("(\\*\\*|\\*|__|_|#+|>|~~|~)").replace(s, "")
-        return s
-    }
+    private fun appendAction(label: String) = appendSpan(fmt.action(label))
 
-    private fun appendReply(text: String) {
-        val parts = text.split("```")
-        for ((i, part) in parts.withIndex()) {
-            if (i % 2 == 0) {
-                val t = stripInline(part).trim()
-                if (t.isNotEmpty()) appendSpan("$t\n")
-            } else {
-                var code = part
-                val nl = code.indexOf('\n')
-                if (nl >= 0) {
-                    val first = code.substring(0, nl).trim()
-                    if (first.isNotEmpty() && !first.contains(' ') && first.length < 15) {
-                        code = code.substring(nl + 1)
-                    }
-                }
-                appendSpan(codeBlock(code))
-            }
-        }
-        appendSpan("\n")
-    }
-
-    private fun col(res: Int) = ContextCompat.getColor(activity, res)
-
-    private val codeKeywords = setOf(
-        "val", "var", "fun", "def", "class", "interface", "object", "return", "if", "else", "for",
-        "while", "do", "when", "switch", "case", "break", "continue", "import", "package", "public",
-        "private", "protected", "static", "final", "void", "new", "this", "super", "try", "catch",
-        "finally", "throw", "throws", "func", "let", "const", "type", "struct", "enum", "defer",
-        "range", "map", "chan", "select", "async", "await", "yield", "lambda", "in", "is", "as",
-        "and", "or", "not", "true", "false", "null", "nil", "none", "int", "string", "bool",
-        "boolean", "float", "double", "long", "char", "byte", "echo", "print", "println", "with",
-        "from", "global", "pass", "raise", "except", "elif", "using", "namespace", "template",
-        "unsigned", "virtual", "override", "suspend", "data", "sealed", "companion", "init", "by"
-    )
-
-    private fun codeBlock(code: String): CharSequence {
-        val body = code.trimEnd('\n') + "\n"
-        val sb = SpannableStringBuilder(body)
-        val flag = Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-        sb.setSpan(ForegroundColorSpan(col(R.color.code_text)), 0, sb.length, flag)
-        sb.setSpan(TypefaceSpan("monospace"), 0, sb.length, flag)
-        sb.setSpan(CodeBlockBg(col(R.color.code_bg)), 0, sb.length, flag)
-        highlightInto(sb, body)
-        return sb
-    }
-
-    private fun highlightInto(sb: SpannableStringBuilder, code: String) {
-        val n = code.length
-        var i = 0
-        fun span(s: Int, e: Int, c: Int) =
-            sb.setSpan(ForegroundColorSpan(c), s, e, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-        val kw = col(R.color.code_kw); val str = col(R.color.code_str)
-        val com = col(R.color.code_com); val num = col(R.color.code_num)
-        while (i < n) {
-            val c = code[i]
-            when {
-                c == '/' && i + 1 < n && code[i + 1] == '/' -> {
-                    val s = i; while (i < n && code[i] != '\n') i++; span(s, i, com)
-                }
-                c == '#' -> { val s = i; while (i < n && code[i] != '\n') i++; span(s, i, com) }
-                c == '/' && i + 1 < n && code[i + 1] == '*' -> {
-                    val s = i; i += 2
-                    while (i + 1 < n && !(code[i] == '*' && code[i + 1] == '/')) i++
-                    i = minOf(n, i + 2); span(s, i, com)
-                }
-                c == '"' || c == '\'' || c == '`' -> {
-                    val q = c; val s = i; i++
-                    while (i < n && code[i] != q) { if (code[i] == '\\') i++; i++ }
-                    i = minOf(n, i + 1); span(s, i, str)
-                }
-                c.isDigit() -> {
-                    val s = i
-                    while (i < n && (code[i].isLetterOrDigit() || code[i] == '.')) i++
-                    span(s, i, num)
-                }
-                c.isLetter() || c == '_' -> {
-                    val s = i
-                    while (i < n && (code[i].isLetterOrDigit() || code[i] == '_')) i++
-                    if (code.substring(s, i) in codeKeywords) span(s, i, kw)
-                }
-                else -> i++
-            }
-        }
-    }
-
-    private class CodeBlockBg(private val bg: Int) : LineBackgroundSpan {
-        override fun drawBackground(
-            canvas: Canvas, paint: Paint, left: Int, right: Int, top: Int,
-            baseline: Int, bottom: Int, text: CharSequence, start: Int, end: Int, lineNumber: Int
-        ) {
-            val orig = paint.color
-            paint.color = bg
-            canvas.drawRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), paint)
-            paint.color = orig
-        }
-    }
-
-    private fun appendAction(label: String) {
-        appendSpan(colored("▸ $label\n", R.color.action_text, italic = true))
-    }
-
-    private fun appendDiff(file: String, patch: String) {
-        appendSpan(colored("✎ $file\n", R.color.action_text, italic = true))
-        for (line in patch.split("\n")) {
-            val color = when {
-                line.startsWith("+") -> R.color.diff_add
-                line.startsWith("-") -> R.color.diff_del
-                else -> R.color.action_text
-            }
-            appendSpan(colored("$line\n", color, mono = true))
-        }
-        appendSpan("\n")
-    }
+    private fun appendDiff(file: String, patch: String) = appendSpan(fmt.diff(file, patch))
 
     fun setStatus(s: String) { statusWord = s; updateStatusLine() }
 
@@ -446,11 +311,11 @@ class MainView(private val host: VoiceHost, root: View) {
         }
         val ctx = host.ctxByAgent[host.currentAgentId ?: -1]
         if (ctx != null && ctx.first > 0) {
-            sb.append("   ctx ").append(fmtTok(ctx.first))
-            if (ctx.second > 0) sb.append("/").append(fmtTok(ctx.second))
+            sb.append("   ctx ").append(fmt.fmtTok(ctx.first))
+            if (ctx.second > 0) sb.append("/").append(fmt.fmtTok(ctx.second))
         }
         if (tokIn > 0 || tokOut > 0) {
-            sb.append("   ↑").append(fmtTok(tokIn)).append(" ↓").append(fmtTok(tokOut))
+            sb.append("   ↑").append(fmt.fmtTok(tokIn)).append(" ↓").append(fmt.fmtTok(tokOut))
         }
         status.text = sb.toString()
     }
@@ -458,8 +323,6 @@ class MainView(private val host: VoiceHost, root: View) {
     private fun savePrefs() {
         prefs().edit().putInt("agent", host.currentAgentId ?: -1).apply()
     }
-
-    private fun fmtTok(n: Int) = if (n >= 1000) "${n / 1000}k" else "$n"
 
     private fun startTimer(label: String) {
         thinkingStart = System.currentTimeMillis()
