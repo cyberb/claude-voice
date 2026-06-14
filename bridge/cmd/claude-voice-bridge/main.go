@@ -1,0 +1,61 @@
+package main
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/cyberb/claude-voice/bridge"
+	"github.com/spf13/cobra"
+)
+
+func main() {
+	cfg := bridge.DefaultConfig()
+
+	root := &cobra.Command{
+		Use:          "claude-voice-bridge",
+		Short:        "Termux-side localhost bridge for the claude-voice Android app",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return run(cfg)
+		},
+	}
+
+	f := root.Flags()
+	f.StringVar(&cfg.Host, "host", cfg.Host, "listen host")
+	f.StringVar(&cfg.Port, "port", cfg.Port, "listen port")
+	f.StringVar(&cfg.Perm, "perm", cfg.Perm, "claude --permission-mode")
+	f.IntVar(&cfg.Timeout, "timeout", cfg.Timeout, "agent timeout in seconds")
+	f.StringVar(&cfg.Whisper, "whisper", cfg.Whisper, "whisper-cli binary path")
+	f.StringVar(&cfg.Model, "whisper-model", cfg.Model, "whisper model path")
+	f.StringVar(&cfg.WorkDir, "workdir", cfg.WorkDir, "starting agent directory (default: home)")
+	f.StringVar(&cfg.NarrateModel, "narrate-model", cfg.NarrateModel, "claude model used for /narrate")
+	f.BoolVar(&cfg.NarrateOn, "narrate", cfg.NarrateOn, "narration on by default")
+	f.StringVar(&cfg.PiperBin, "piper-bin", cfg.PiperBin, "piper binary path")
+	f.StringVar(&cfg.PiperLib, "piper-lib", cfg.PiperLib, "piper LD_LIBRARY_PATH dir")
+	f.StringVar(&cfg.PiperEspeak, "piper-espeak", cfg.PiperEspeak, "piper espeak-ng-data dir")
+	f.StringVar(&cfg.PiperVoices, "piper-voices", cfg.PiperVoices, "piper voices dir")
+	f.StringVar(&cfg.PiperModel, "piper-model", cfg.PiperModel, "explicit piper voice model")
+
+	if err := root.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run(cfg bridge.Config) error {
+	start := cfg.WorkDir
+	if start == "" {
+		start = bridge.Home()
+	}
+	h := bridge.NewHandlers(cfg)
+	h.AddAgent(start)
+
+	addr := cfg.Host + ":" + cfg.Port
+	fmt.Printf("claude-voice bridge on http://%s  (perm=%s, start_dir=%s)\n", addr, cfg.Perm, start)
+
+	srv := bridge.NewServer(addr, h)
+	if err := srv.ListenAndServe(); err != nil {
+		fmt.Fprintln(os.Stderr, "server error:", err)
+		return err
+	}
+	return nil
+}

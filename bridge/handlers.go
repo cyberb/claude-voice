@@ -1,18 +1,4 @@
-// claude-voice bridge: Termux-side localhost server for the Android app.
-//
-// One bridge, one connection from the app, N agents. Each agent is a working
-// directory with its own `claude --continue` conversation chain.
-//
-//	GET    /health                       -> "ok"
-//	GET    /agents                       -> [{id,name,dir,branch,dirty}]
-//	POST   /agents   {"dir":"~/repo"}    -> create/return agent, then current list
-//	DELETE /agents/<id>                  -> remove agent
-//	POST   /stt      WAV bytes           -> transcript (whisper.cpp, stateless)
-//	POST   /chat     {"text","agent":id} -> agent reply (claude -p, routed to dir)
-//
-// Single static binary (CGO_ENABLED=0). Shells out to the whisper.cpp cli and
-// the claude CLI, both of which run here in Termux where the repos and tools are.
-package main
+package bridge
 
 import (
 	"bufio"
@@ -29,24 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
-
-var (
-	whisper = env("WHISPER_BIN", expand("~/storage/projects/whisper.cpp/build/bin/whisper-cli"))
-	model   = env("WHISPER_MODEL", expand("~/whisper-models/ggml-base.en.bin"))
-	perm    = env("VOICE_PERM", "bypassPermissions")
-	timeout = envInt("VOICE_TIMEOUT", 1800)
-	host    = env("VOICE_HOST", "127.0.0.1")
-	port    = env("VOICE_PORT", "8765")
-
-	piperBin    = env("PIPER_BIN", expand("~/piper/piper"))
-	piperLib    = env("PIPER_LIB", filepath.Dir(piperBin))
-	piperEspeak = env("PIPER_ESPEAK", filepath.Join(filepath.Dir(piperBin), "espeak-ng-data"))
-	piperVoices = env("PIPER_VOICES", expand("~/piper-voices"))
-	piperModel  = env("PIPER_MODEL", "")
-
-	narrateModel = env("NARRATE_MODEL", "haiku")
-	narrateOn    = env("VOICE_NARRATE", "1") != "0"
 )
 
 const narrateMarker = "===SPOKEN==="
@@ -70,59 +38,51 @@ type agent struct {
 	session string
 }
 
-var (
+type agentInfo struct {
+	ID     int     `json:"id"`
+	Dir    string  `json:"dir"`
+	Name   string  `json:"name"`
+	Branch *string `json:"branch"`
+	Dirty  bool    `json:"dirty"`
+	Exists bool    `json:"exists"`
+}
+
+type sessionInfo struct {
+	ID      string `json:"id"`
+	Preview string `json:"preview"`
+	Mtime   int64  `json:"mtime"`
+}
+
+// Handlers is the implementation behind the HTTP routes: it owns the bridge
+// config and the in-memory agent registry, and shells out to claude/whisper/piper.
+type Handlers struct {
+	cfg    Config
 	mu     sync.Mutex
-	agents = map[int]*agent{}
-	nextID = 1
-)
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
+	agents map[int]*agent
+	nextID int
 }
 
-func envInt(k string, d int) int {
-	if v := os.Getenv(k); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return d
+// NewHandlers creates a Handlers with the given config and an empty registry.
+func NewHandlers(cfg Config) *Handlers {
+	return &Handlers{cfg: cfg, agents: map[int]*agent{}, nextID: 1}
 }
 
-func expand(p string) string {
-	if strings.HasPrefix(p, "~/") {
-		if h, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(h, p[2:])
-		}
-	}
-	return p
-}
-
-func home() string {
-	if h, err := os.UserHomeDir(); err == nil {
-		return h
-	}
-	return "/"
-}
-
-func addAgent(dir string) int {
+// AddAgent registers (or returns the existing id for) a working directory.
+func (h *Handlers) AddAgent(dir string) int {
 	dir = expand(strings.TrimSpace(dir))
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	for id, a := range agents {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, a := range h.agents {
 		if a.dir == dir {
 			return id
 		}
 	}
-	id := nextID
-	nextID++
-	agents[id] = &agent{dir: dir}
+	id := h.nextID
+	h.nextID++
+	h.agents[id] = &agent{dir: dir}
 	return id
 }
 
@@ -136,24 +96,15 @@ func gitinfo(dir string) (string, bool) {
 	return branch, len(strings.TrimSpace(string(s))) > 0
 }
 
-type agentInfo struct {
-	ID     int     `json:"id"`
-	Dir    string  `json:"dir"`
-	Name   string  `json:"name"`
-	Branch *string `json:"branch"`
-	Dirty  bool    `json:"dirty"`
-	Exists bool    `json:"exists"`
-}
-
-func agentList() []agentInfo {
-	mu.Lock()
+func (h *Handlers) agentList() []agentInfo {
+	h.mu.Lock()
 	dirs := map[int]string{}
-	ids := make([]int, 0, len(agents))
-	for id, a := range agents {
+	ids := make([]int, 0, len(h.agents))
+	for id, a := range h.agents {
 		ids = append(ids, id)
 		dirs[id] = a.dir
 	}
-	mu.Unlock()
+	h.mu.Unlock()
 	sort.Ints(ids)
 	out := []agentInfo{}
 	for _, id := range ids {
@@ -173,7 +124,7 @@ func agentList() []agentInfo {
 	return out
 }
 
-func transcribe(wav []byte) string {
+func (h *Handlers) transcribe(wav []byte) string {
 	d, err := os.MkdirTemp("", "cv")
 	if err != nil {
 		return ""
@@ -184,7 +135,7 @@ func transcribe(wav []byte) string {
 	if err := os.WriteFile(in, wav, 0o600); err != nil {
 		return ""
 	}
-	exec.Command(whisper, "-m", model, "-f", in, "-l", "en", "-nt", "-np", "-otxt", "-of", outp).Run()
+	exec.Command(h.cfg.Whisper, "-m", h.cfg.Model, "-f", in, "-l", "en", "-nt", "-np", "-otxt", "-of", outp).Run()
 	txt, err := os.ReadFile(outp + ".txt")
 	if err != nil {
 		return ""
@@ -341,13 +292,13 @@ func transform(line []byte) [][]byte {
 	return out
 }
 
-func piperEnabled() bool {
-	_, err := os.Stat(piperBin)
+func (h *Handlers) piperEnabled() bool {
+	_, err := os.Stat(h.cfg.PiperBin)
 	return err == nil
 }
 
-func listVoices() []string {
-	entries, err := os.ReadDir(piperVoices)
+func (h *Handlers) listVoices() []string {
+	entries, err := os.ReadDir(h.cfg.PiperVoices)
 	if err != nil {
 		return []string{}
 	}
@@ -361,17 +312,17 @@ func listVoices() []string {
 	return out
 }
 
-func resolveVoice(name string) string {
+func (h *Handlers) resolveVoice(name string) string {
 	if name != "" {
-		if p := filepath.Join(piperVoices, name+".onnx"); fileExists(p) {
+		if p := filepath.Join(h.cfg.PiperVoices, name+".onnx"); fileExists(p) {
 			return p
 		}
 	}
-	if piperModel != "" && fileExists(piperModel) {
-		return piperModel
+	if h.cfg.PiperModel != "" && fileExists(h.cfg.PiperModel) {
+		return h.cfg.PiperModel
 	}
-	for _, v := range listVoices() {
-		return filepath.Join(piperVoices, v+".onnx")
+	for _, v := range h.listVoices() {
+		return filepath.Join(h.cfg.PiperVoices, v+".onnx")
 	}
 	return ""
 }
@@ -381,8 +332,8 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-func synth(text, voice string) ([]byte, error) {
-	model := resolveVoice(voice)
+func (h *Handlers) synth(text, voice string) ([]byte, error) {
+	model := h.resolveVoice(voice)
 	if model == "" {
 		return nil, fmt.Errorf("no voice model")
 	}
@@ -392,50 +343,13 @@ func synth(text, voice string) ([]byte, error) {
 	}
 	defer os.RemoveAll(d)
 	wav := filepath.Join(d, "o.wav")
-	cmd := exec.Command("grun", piperBin, "-m", model, "--espeak_data", piperEspeak, "-f", wav)
-	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+piperLib)
+	cmd := exec.Command("grun", h.cfg.PiperBin, "-m", model, "--espeak_data", h.cfg.PiperEspeak, "-f", wav)
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+h.cfg.PiperLib)
 	cmd.Stdin = strings.NewReader(text)
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(wav)
-}
-
-func voicesHandler(w http.ResponseWriter, r *http.Request) {
-	if !piperEnabled() {
-		writeJSON(w, 200, []string{})
-		return
-	}
-	writeJSON(w, 200, listVoices())
-}
-
-func ttsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeText(w, 405, "method not allowed")
-		return
-	}
-	if !piperEnabled() {
-		writeText(w, 501, "piper not configured")
-		return
-	}
-	var p struct {
-		Text  string `json:"text"`
-		Voice string `json:"voice"`
-	}
-	json.NewDecoder(r.Body).Decode(&p)
-	if strings.TrimSpace(p.Text) == "" {
-		writeText(w, 400, "empty text")
-		return
-	}
-	wav, err := synth(p.Text, p.Voice)
-	if err != nil {
-		writeText(w, 500, "tts failed")
-		return
-	}
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
-	w.WriteHeader(200)
-	w.Write(wav)
 }
 
 func writeText(w http.ResponseWriter, code int, body string) {
@@ -450,10 +364,51 @@ func writeJSON(w http.ResponseWriter, code int, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func agentsHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
+	writeText(w, 200, "ok")
+}
+
+func (h *Handlers) Voices(w http.ResponseWriter, r *http.Request) {
+	if !h.piperEnabled() {
+		writeJSON(w, 200, []string{})
+		return
+	}
+	writeJSON(w, 200, h.listVoices())
+}
+
+func (h *Handlers) Tts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	if !h.piperEnabled() {
+		writeText(w, 501, "piper not configured")
+		return
+	}
+	var p struct {
+		Text  string `json:"text"`
+		Voice string `json:"voice"`
+	}
+	json.NewDecoder(r.Body).Decode(&p)
+	if strings.TrimSpace(p.Text) == "" {
+		writeText(w, 400, "empty text")
+		return
+	}
+	wav, err := h.synth(p.Text, p.Voice)
+	if err != nil {
+		writeText(w, 500, "tts failed")
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
+	w.WriteHeader(200)
+	w.Write(wav)
+}
+
+func (h *Handlers) Agents(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, 200, agentList())
+		writeJSON(w, 200, h.agentList())
 	case http.MethodPost:
 		var p struct {
 			Dir     string `json:"dir"`
@@ -464,27 +419,27 @@ func agentsHandler(w http.ResponseWriter, r *http.Request) {
 			writeText(w, 400, "missing dir")
 			return
 		}
-		aid := addAgent(p.Dir)
+		aid := h.AddAgent(p.Dir)
 		if p.Session != "" {
-			mu.Lock()
-			if agents[aid] != nil {
-				agents[aid].session = p.Session
+			h.mu.Lock()
+			if h.agents[aid] != nil {
+				h.agents[aid].session = p.Session
 			}
-			mu.Unlock()
+			h.mu.Unlock()
 		}
-		writeJSON(w, 200, agentList())
+		writeJSON(w, 200, h.agentList())
 	default:
 		writeText(w, 405, "method not allowed")
 	}
 }
 
-func runClaudeSession(dir, resume, text string) (string, string, error) {
+func (h *Handlers) runClaudeSession(dir, resume, text string) (string, string, error) {
 	args := []string{"-p", "--output-format", "json"}
 	if resume != "" {
 		args = append(args, "--resume", resume)
 	}
-	args = append(args, "--permission-mode", perm, text)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	args = append(args, "--permission-mode", h.cfg.Perm, text)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.cfg.Timeout)*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = dir
@@ -501,36 +456,37 @@ func runClaudeSession(dir, resume, text string) (string, string, error) {
 	return strings.TrimSpace(t), s, nil
 }
 
-func compactAgent(id int) (string, bool) {
-	mu.Lock()
-	a := agents[id]
+func (h *Handlers) compactAgent(id int) (string, bool) {
+	h.mu.Lock()
+	a := h.agents[id]
 	var dir, sess string
 	if a != nil {
 		dir, sess = a.dir, a.session
 	}
-	mu.Unlock()
+	h.mu.Unlock()
 	if a == nil {
 		return "", false
 	}
-	summary, _, err := runClaudeSession(dir, sess,
+	summary, _, err := h.runClaudeSession(dir, sess,
 		"Summarize our conversation so far as concisely as possible — key decisions, "+
 			"important context, and the current state — so a fresh session can continue "+
 			"seamlessly. Output only the summary, no preamble.")
 	if err != nil || summary == "" {
 		return "", false
 	}
-	_, newSess, _ := runClaudeSession(dir, "",
+	_, newSess, _ := h.runClaudeSession(dir, "",
 		"Context from our earlier conversation (summarized):\n\n"+summary+
 			"\n\nAcknowledge with just: ready.")
-	mu.Lock()
-	if agents[id] != nil {
-		agents[id].session = newSess
+	h.mu.Lock()
+	if h.agents[id] != nil {
+		h.agents[id].session = newSess
 	}
-	mu.Unlock()
+	h.mu.Unlock()
 	return summary, true
 }
 
-func agentDeleteHandler(w http.ResponseWriter, r *http.Request) {
+// AgentByID handles /agents/<id>, /agents/<id>/compact and /agents/<id>/clear.
+func (h *Handlers) AgentByID(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/agents/")
 	if strings.HasSuffix(rest, "/compact") {
 		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/compact"))
@@ -538,7 +494,7 @@ func agentDeleteHandler(w http.ResponseWriter, r *http.Request) {
 			writeText(w, 400, "bad id")
 			return
 		}
-		summary, ok := compactAgent(id)
+		summary, ok := h.compactAgent(id)
 		if !ok {
 			writeText(w, 500, "compact failed")
 			return
@@ -552,11 +508,11 @@ func agentDeleteHandler(w http.ResponseWriter, r *http.Request) {
 			writeText(w, 400, "bad id")
 			return
 		}
-		mu.Lock()
-		if a := agents[id]; a != nil {
+		h.mu.Lock()
+		if a := h.agents[id]; a != nil {
 			a.session = ""
 		}
-		mu.Unlock()
+		h.mu.Unlock()
 		writeText(w, 200, "ok")
 		return
 	}
@@ -569,22 +525,22 @@ func agentDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		writeText(w, 400, "bad id")
 		return
 	}
-	mu.Lock()
-	delete(agents, id)
-	mu.Unlock()
-	writeJSON(w, 200, agentList())
+	h.mu.Lock()
+	delete(h.agents, id)
+	h.mu.Unlock()
+	writeJSON(w, 200, h.agentList())
 }
 
-func narrate(text string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+func (h *Handlers) narrate(text string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.cfg.Timeout)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", narrateModel,
-		"--permission-mode", perm, narratePrompt+text)
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", h.cfg.NarrateModel,
+		"--permission-mode", h.cfg.Perm, narratePrompt+text)
 	out, err := cmd.Output()
 	return strings.TrimSpace(string(out)), err
 }
 
-func narrateHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) Narrate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeText(w, 405, "method not allowed")
 		return
@@ -597,7 +553,7 @@ func narrateHandler(w http.ResponseWriter, r *http.Request) {
 		writeText(w, 400, "empty text")
 		return
 	}
-	n, err := narrate(p.Text)
+	n, err := h.narrate(p.Text)
 	if err != nil || n == "" {
 		writeText(w, 500, "narrate failed")
 		return
@@ -605,13 +561,13 @@ func narrateHandler(w http.ResponseWriter, r *http.Request) {
 	writeText(w, 200, n)
 }
 
-func sttHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) Stt(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeText(w, 405, "method not allowed")
 		return
 	}
 	body, _ := io.ReadAll(r.Body)
-	writeText(w, 200, transcribe(body))
+	writeText(w, 200, h.transcribe(body))
 }
 
 func encodeDir(d string) string {
@@ -621,12 +577,6 @@ func encodeDir(d string) string {
 		}
 		return '-'
 	}, d)
-}
-
-type sessionInfo struct {
-	ID      string `json:"id"`
-	Preview string `json:"preview"`
-	Mtime   int64  `json:"mtime"`
 }
 
 func sessionPreview(path string) string {
@@ -690,7 +640,7 @@ func listSessions(dir string) []sessionInfo {
 	return out
 }
 
-func sessionsHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) Sessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeText(w, 405, "method not allowed")
 		return
@@ -771,7 +721,7 @@ func historyEvents(dir, id string) [][]byte {
 	return out
 }
 
-func historyHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) History(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeText(w, 405, "method not allowed")
 		return
@@ -797,7 +747,7 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("]"))
 }
 
-func lsHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) Ls(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeText(w, 405, "method not allowed")
 		return
@@ -829,7 +779,7 @@ func lsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"dir": dir, "parent": parent, "dirs": dirs})
 }
 
-func chatHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handlers) Chat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeText(w, 405, "method not allowed")
 		return
@@ -844,16 +794,16 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	id := 0
 	if p.Agent != nil {
 		id = *p.Agent
-	} else if lst := agentList(); len(lst) > 0 {
+	} else if lst := h.agentList(); len(lst) > 0 {
 		id = lst[0].ID
 	}
-	mu.Lock()
-	a := agents[id]
+	h.mu.Lock()
+	a := h.agents[id]
 	var dir, resume string
 	if a != nil {
 		dir, resume = a.dir, a.session
 	}
-	mu.Unlock()
+	h.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	flusher, _ := w.(http.Flusher)
@@ -876,15 +826,15 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(p.Model) != "" {
 		args = append(args, "--model", p.Model)
 	}
-	doNarrate := narrateOn
+	doNarrate := h.cfg.NarrateOn
 	if p.Narrate != nil {
 		doNarrate = *p.Narrate
 	}
 	if doNarrate {
 		args = append(args, "--append-system-prompt", narrateSystem)
 	}
-	args = append(args, "--permission-mode", perm, p.Text)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	args = append(args, "--permission-mode", h.cfg.Perm, p.Text)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(h.cfg.Timeout)*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = dir
@@ -954,41 +904,13 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	cmd.Wait()
 	if ctx.Err() == context.DeadlineExceeded {
-		emit(mustJSON(map[string]string{"t": "reply", "text": fmt.Sprintf("The agent took longer than %d seconds, so I stopped it. Try a smaller step.", timeout)}))
+		emit(mustJSON(map[string]string{"t": "reply", "text": fmt.Sprintf("The agent took longer than %d seconds, so I stopped it. Try a smaller step.", h.cfg.Timeout)}))
 	} else if !sawReply {
 		emit(mustJSON(map[string]string{"t": "reply", "text": "No response."}))
 	}
-	mu.Lock()
-	if agents[id] != nil && newSession != "" {
-		agents[id].session = newSession
+	h.mu.Lock()
+	if h.agents[id] != nil && newSession != "" {
+		h.agents[id].session = newSession
 	}
-	mu.Unlock()
-}
-
-func main() {
-	start := env("VOICE_WORKDIR", "")
-	if start == "" {
-		start = home()
-	}
-	addAgent(start)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { writeText(w, 200, "ok") })
-	mux.HandleFunc("/agents", agentsHandler)
-	mux.HandleFunc("/agents/", agentDeleteHandler)
-	mux.HandleFunc("/ls", lsHandler)
-	mux.HandleFunc("/sessions", sessionsHandler)
-	mux.HandleFunc("/history", historyHandler)
-	mux.HandleFunc("/stt", sttHandler)
-	mux.HandleFunc("/chat", chatHandler)
-	mux.HandleFunc("/tts", ttsHandler)
-	mux.HandleFunc("/voices", voicesHandler)
-	mux.HandleFunc("/narrate", narrateHandler)
-
-	addr := host + ":" + port
-	fmt.Printf("claude-voice bridge on http://%s  (perm=%s, start_dir=%s)\n", addr, perm, start)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		fmt.Fprintln(os.Stderr, "server error:", err)
-		os.Exit(1)
-	}
+	h.mu.Unlock()
 }

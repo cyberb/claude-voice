@@ -73,7 +73,7 @@ local bridge() = {
             commands: [
                 "cd bridge",
                 "go vet ./...",
-                "CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags=\"-s -w\" -o ../claude-voice-bridge-arm64 ."
+                "CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags=\"-s -w\" -o ../claude-voice-bridge-arm64 ./cmd/claude-voice-bridge"
             ]
         },
         {
