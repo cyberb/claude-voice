@@ -23,6 +23,7 @@
     <string name="compact_chat">Compact current chat</string>
     <string name="clear_short">clear</string>
     <string name="compact_short">compact</string>
+    <string name="overflow_dots">⋮</string>
     <string name="background_mode">Background mode (screen off)</string>
     <string name="arm_ptt">Volume-up push-to-talk</string>
     <string name="trigger_label">Push-to-talk trigger</string>

@@ -45,6 +45,7 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.PopupMenu
 import android.widget.RadioGroup
 import android.widget.RelativeLayout
 import android.widget.ScrollView
@@ -198,36 +199,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         findViewById<Button>(R.id.addAgent).setOnClickListener { openDirPicker() }
-        findViewById<TextView>(R.id.clearBtn).setOnClickListener {
-            val id = currentAgentId ?: return@setOnClickListener
-            ui.launch {
-                post("${base()}/agents/$id/clear", "{}".toRequestBody(jsonType))
-                transcripts.remove(id)
-                ctxByAgent.remove(id)
-                tokIn = 0; tokOut = 0
-                showTranscript()
-                updateBottom()
-                setStatus("cleared")
-                drawer.closeDrawers()
+        findViewById<TextView>(R.id.overflowBtn).setOnClickListener { v ->
+            val pm = PopupMenu(this, v)
+            pm.menu.add(0, 1, 0, R.string.clear_short)
+            pm.menu.add(0, 2, 1, R.string.compact_short)
+            pm.setOnMenuItemClickListener { item ->
+                when (item.itemId) {
+                    1 -> { clearAgent(); true }
+                    2 -> { compactAgent(); true }
+                    else -> false
+                }
             }
-        }
-        findViewById<TextView>(R.id.compactBtn).setOnClickListener {
-            val id = currentAgentId ?: return@setOnClickListener
-            drawer.closeDrawers()
-            tokIn = 0; tokOut = 0
-            setBusy(true)
-            startTimer("compacting…")
-            chatJob = ui.launch {
-                val s = post("${base()}/agents/$id/compact", "{}".toRequestBody(jsonType))
-                stopThinking()
-                setBusy(false)
-                if (s == null) { setStatus("compact failed"); return@launch }
-                appendSpan(colored("— conversation compacted —\n\n", R.color.action_text, italic = true))
-                ctxByAgent.remove(id)
-                tokIn = 0; tokOut = 0
-                updateBottom()
-                setStatus("compacted")
-            }
+            pm.show()
         }
         findViewById<Button>(R.id.openSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -260,6 +243,39 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         bottombar.layoutParams = barLp
         scroll.layoutParams = scrollLp
+    }
+
+    private fun clearAgent() {
+        val id = currentAgentId ?: return
+        ui.launch {
+            post("${base()}/agents/$id/clear", "{}".toRequestBody(jsonType))
+            transcripts.remove(id)
+            ctxByAgent.remove(id)
+            tokIn = 0; tokOut = 0
+            showTranscript()
+            updateBottom()
+            setStatus("cleared")
+            drawer.closeDrawers()
+        }
+    }
+
+    private fun compactAgent() {
+        val id = currentAgentId ?: return
+        drawer.closeDrawers()
+        tokIn = 0; tokOut = 0
+        setBusy(true)
+        startTimer("compacting…")
+        chatJob = ui.launch {
+            val s = post("${base()}/agents/$id/compact", "{}".toRequestBody(jsonType))
+            stopThinking()
+            setBusy(false)
+            if (s == null) { setStatus("compact failed"); return@launch }
+            appendSpan(colored("— conversation compacted —\n\n", R.color.action_text, italic = true))
+            ctxByAgent.remove(id)
+            tokIn = 0; tokOut = 0
+            updateBottom()
+            setStatus("compacted")
+        }
     }
 
     override fun onPause() {

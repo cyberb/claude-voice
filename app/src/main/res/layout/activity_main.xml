@@ -84,7 +84,7 @@
                         android:textSize="12sp" />
 
                     <TextView
-                        android:id="@+id/clearBtn"
+                        android:id="@+id/overflowBtn"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:background="@drawable/chip_bg"
@@ -94,25 +94,10 @@
                         android:paddingEnd="10dp"
                         android:paddingTop="2dp"
                         android:paddingBottom="2dp"
-                        android:text="@string/clear_short"
+                        android:text="@string/overflow_dots"
                         android:textColor="@color/status_text"
-                        android:textSize="11sp" />
-
-                    <TextView
-                        android:id="@+id/compactBtn"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/chip_bg"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:paddingStart="10dp"
-                        android:paddingEnd="10dp"
-                        android:paddingTop="2dp"
-                        android:paddingBottom="2dp"
-                        android:text="@string/compact_short"
-                        android:textColor="@color/status_text"
-                        android:textSize="11sp" />
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
                 </LinearLayout>
             </LinearLayout>
 
