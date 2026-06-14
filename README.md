@@ -16,9 +16,9 @@ tools — and the app is a thin voice front-end that reaches it over localhost.
 </p>
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph phone["📱 one phone — nothing leaves the device"]
-    direction LR
+    direction TB
     subgraph app["Android app · this repo"]
       direction TB
       mic["🎙️ hold-to-talk<br/>16 kHz mono wav"]
