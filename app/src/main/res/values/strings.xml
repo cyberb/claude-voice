@@ -12,6 +12,8 @@
     <string name="sec_bridge">Bridge</string>
     <string name="sec_voice">Voice</string>
     <string name="sec_handsfree">Hands-free (screen off)</string>
+    <string name="sec_display">Display</string>
+    <string name="statusbar_top">Status bar at top of screen</string>
     <string name="voice">Voice</string>
     <string name="stop">Stop</string>
     <string name="use_piper">Use Piper (neural voice)</string>

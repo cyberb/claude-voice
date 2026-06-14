@@ -53,6 +53,20 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
+            android:text="@string/sec_display"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <CheckBox
+            android:id="@+id/statusBarTopBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/statusbar_top" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
             android:text="@string/sec_handsfree"
             android:textSize="16sp"
             android:textStyle="bold" />

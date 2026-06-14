@@ -38,6 +38,7 @@ class SettingsActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var bridgeUrl: EditText
     private lateinit var usePiper: CheckBox
     private lateinit var speakStatus: CheckBox
+    private lateinit var statusBarTop: CheckBox
     private lateinit var bgMode: CheckBox
     private lateinit var btMic: CheckBox
     private lateinit var triggerGroup: RadioGroup
@@ -57,6 +58,7 @@ class SettingsActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         bridgeUrl = findViewById(R.id.bridgeUrl)
         usePiper = findViewById(R.id.piperSwitch)
         speakStatus = findViewById(R.id.speakStatusBox)
+        statusBarTop = findViewById(R.id.statusBarTopBox)
         bgMode = findViewById(R.id.bgMode)
         btMic = findViewById(R.id.btMicBox)
         triggerGroup = findViewById(R.id.triggerGroup)
@@ -65,6 +67,7 @@ class SettingsActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         bridgeUrl.setText(prefs().getString("bridge", "http://127.0.0.1:8765"))
         usePiper.isChecked = prefs().getBoolean("piper", false)
         speakStatus.isChecked = prefs().getBoolean("speakStatus", true)
+        statusBarTop.isChecked = prefs().getBoolean("statusbarTop", false)
         bgMode.isChecked = prefs().getBoolean("running", false)
         btMic.isChecked = prefs().getBoolean("btmic", false)
         when (prefs().getString("trigger", "accessibility")) {
@@ -78,6 +81,7 @@ class SettingsActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (c) loadPiperVoices() else loadTtsVoices()
         }
         speakStatus.setOnCheckedChangeListener { _, c -> prefs().edit().putBoolean("speakStatus", c).apply() }
+        statusBarTop.setOnCheckedChangeListener { _, c -> prefs().edit().putBoolean("statusbarTop", c).apply() }
         bgMode.setOnCheckedChangeListener { _, c ->
             prefs().edit().putBoolean("running", c).apply()
             saveBridge()

@@ -46,6 +46,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.RadioGroup
+import android.widget.RelativeLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
@@ -96,6 +97,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var drawer: DrawerLayout
     private lateinit var transcript: TextView
     private lateinit var scroll: ScrollView
+    private lateinit var bottombar: View
     private lateinit var status: TextView
     private lateinit var workdir: TextView
     private lateinit var branch: TextView
@@ -159,6 +161,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         drawer = findViewById(R.id.drawer)
         transcript = findViewById(R.id.transcript)
         scroll = findViewById(R.id.scroll)
+        bottombar = findViewById(R.id.bottombar)
         status = findViewById(R.id.status)
         workdir = findViewById(R.id.workdir)
         branch = findViewById(R.id.branch)
@@ -237,6 +240,26 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onResume()
         startPolling()
         applyTtsVoice()
+        applyBarPosition()
+    }
+
+    private fun applyBarPosition() {
+        val top = cvPrefs().getBoolean("statusbarTop", false)
+        val barLp = bottombar.layoutParams as RelativeLayout.LayoutParams
+        val scrollLp = scroll.layoutParams as RelativeLayout.LayoutParams
+        if (top) {
+            barLp.removeRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
+            barLp.addRule(RelativeLayout.ALIGN_PARENT_TOP)
+            scrollLp.removeRule(RelativeLayout.ABOVE)
+            scrollLp.addRule(RelativeLayout.BELOW, R.id.bottombar)
+        } else {
+            barLp.removeRule(RelativeLayout.ALIGN_PARENT_TOP)
+            barLp.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM)
+            scrollLp.removeRule(RelativeLayout.BELOW)
+            scrollLp.addRule(RelativeLayout.ABOVE, R.id.bottombar)
+        }
+        bottombar.layoutParams = barLp
+        scroll.layoutParams = scrollLp
     }
 
     override fun onPause() {
