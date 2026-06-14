@@ -1,6 +1,6 @@
 local build() = {
     kind: "pipeline",
-    name: "android",
+    name: "build",
 
     platform: {
         os: "linux",
@@ -8,7 +8,16 @@ local build() = {
     },
     steps: [
         {
-            name: "build",
+            name: "bridge",
+            image: "golang:1.23-bookworm",
+            commands: [
+                "cd bridge",
+                "go vet ./...",
+                "CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags=\"-s -w\" -o ../claude-voice-bridge-arm64 ./cmd/claude-voice-bridge"
+            ]
+        },
+        {
+            name: "android",
             image: "runmymind/docker-android-sdk:ubuntu-standalone-20240812",
             environment: {
                 KEY_STORE: { from_secret: "KEY_STORE" },
@@ -20,7 +29,9 @@ local build() = {
             commands: [
                 "yes | sdkmanager --licenses > /dev/null 2>&1 || true",
                 "sdkmanager 'platform-tools' 'platforms;android-34' 'build-tools;34.0.0'",
-                "./gradlew clean test assemble"
+                "cd android",
+                "./gradlew clean test assemble",
+                "cp app/build/outputs/apk/release/*.apk ../"
             ]
         },
         {
@@ -28,7 +39,7 @@ local build() = {
             image: "plugins/github-release:1.0.0",
             settings: {
                 api_key: { from_secret: "github_token" },
-                files: "app/build/outputs/apk/release/*.apk",
+                files: [ "claude-voice-*.apk", "claude-voice-bridge-arm64" ],
                 title: "${DRONE_TAG}",
                 note: "RELEASE_NOTES.md",
                 overwrite: true,
@@ -39,7 +50,7 @@ local build() = {
             }
         },
         {
-            name: "artifact",
+            name: "artifacts",
             image: "appleboy/drone-scp",
             settings: {
                 host: { from_secret: "artifact_host" },
@@ -48,60 +59,7 @@ local build() = {
                 timeout: "2m",
                 command_timeout: "2m",
                 target: "/home/artifact/repo/claude-voice/${DRONE_BUILD_NUMBER}",
-                source: "app/build/outputs/apk/release/*.apk",
-                strip_components: 5
-            },
-            when: {
-                status: [ "failure", "success" ]
-            }
-        }
-    ]
-};
-
-local bridge() = {
-    kind: "pipeline",
-    name: "bridge",
-
-    platform: {
-        os: "linux",
-        arch: "amd64"
-    },
-    steps: [
-        {
-            name: "build",
-            image: "golang:1.23-bookworm",
-            commands: [
-                "cd bridge",
-                "go vet ./...",
-                "CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags=\"-s -w\" -o ../claude-voice-bridge-arm64 ./cmd/claude-voice-bridge"
-            ]
-        },
-        {
-            name: "publish to github",
-            image: "plugins/github-release:1.0.0",
-            settings: {
-                api_key: { from_secret: "github_token" },
-                files: "claude-voice-bridge-arm64",
-                title: "${DRONE_TAG}",
-                note: "RELEASE_NOTES.md",
-                overwrite: true,
-                file_exists: "overwrite"
-            },
-            when: {
-                event: [ "tag" ]
-            }
-        },
-        {
-            name: "artifact",
-            image: "appleboy/drone-scp",
-            settings: {
-                host: { from_secret: "artifact_host" },
-                username: "artifact",
-                key: { from_secret: "artifact_key" },
-                timeout: "2m",
-                command_timeout: "2m",
-                target: "/home/artifact/repo/claude-voice/${DRONE_BUILD_NUMBER}",
-                source: "claude-voice-bridge-arm64",
+                source: [ "claude-voice-*.apk", "claude-voice-bridge-arm64" ],
                 strip_components: 0
             },
             when: {
@@ -112,6 +70,5 @@ local bridge() = {
 };
 
 [
-    build(),
-    bridge()
+    build()
 ]
