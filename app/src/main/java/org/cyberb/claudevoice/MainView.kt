@@ -8,10 +8,10 @@ import android.os.Looper
 import android.text.SpannableStringBuilder
 import android.view.MotionEvent
 import android.view.View
-import android.widget.PopupMenu
 import android.widget.RelativeLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
@@ -68,19 +68,24 @@ class MainView(private val host: VoiceHost, root: View) {
 
     init {
         bindTalk()
-        root.findViewById<TextView>(R.id.overflowBtn).setOnClickListener { v ->
-            val pm = PopupMenu(activity, v)
-            pm.menu.add(0, 1, 0, R.string.clear_short)
-            pm.menu.add(0, 2, 1, R.string.compact_short)
-            pm.setOnMenuItemClickListener { item ->
-                when (item.itemId) {
-                    1 -> { clearAgent(); true }
-                    2 -> { compactAgent(); true }
-                    else -> false
+        root.findViewById<TextView>(R.id.overflowBtn).setOnClickListener { showActions() }
+    }
+
+    private fun showActions() {
+        val items = arrayOf(
+            activity.getString(R.string.action_clear),
+            activity.getString(R.string.action_compact),
+        )
+        AlertDialog.Builder(activity)
+            .setTitle(R.string.actions_title)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> clearAgent()
+                    1 -> compactAgent()
                 }
             }
-            pm.show()
-        }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     fun onServiceEvent(type: String, text: String) {
