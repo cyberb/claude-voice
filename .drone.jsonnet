@@ -29,6 +29,8 @@ local build() = {
             settings: {
                 api_key: { from_secret: "github_token" },
                 files: "app/build/outputs/apk/release/*.apk",
+                title: "${DRONE_TAG}",
+                note: "RELEASE_NOTES.md",
                 overwrite: true,
                 file_exists: "overwrite"
             },
@@ -80,6 +82,8 @@ local bridge() = {
             settings: {
                 api_key: { from_secret: "github_token" },
                 files: "claude-voice-bridge-arm64",
+                title: "${DRONE_TAG}",
+                note: "RELEASE_NOTES.md",
                 overwrite: true,
                 file_exists: "overwrite"
             },
