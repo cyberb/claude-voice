@@ -35,7 +35,7 @@ var (
 	whisper = env("WHISPER_BIN", expand("~/storage/projects/whisper.cpp/build/bin/whisper-cli"))
 	model   = env("WHISPER_MODEL", expand("~/whisper-models/ggml-base.en.bin"))
 	perm    = env("VOICE_PERM", "bypassPermissions")
-	timeout = envInt("VOICE_TIMEOUT", 180)
+	timeout = envInt("VOICE_TIMEOUT", 1800)
 	host    = env("VOICE_HOST", "127.0.0.1")
 	port    = env("VOICE_PORT", "8765")
 
@@ -50,6 +50,13 @@ var (
 )
 
 const narrateMarker = "===SPOKEN==="
+
+var working = []string{
+	"I'm still working on it.",
+	"Still going, hang tight.",
+	"Working on it, almost there.",
+	"Still busy, give me a moment.",
+}
 
 const narrateSystem = `IMPORTANT OUTPUT RULE: Whenever your reply contains any code, you MUST end your message with a line containing exactly ===SPOKEN=== followed by a spoken narration of your entire reply for a developer who cannot see the screen. In the narration, read all code in full natural-language detail: name every declaration, identifier, type, parameter, and return, and describe the control flow and logic; phrase symbols naturally and never read punctuation literally. If your reply contains no code, do NOT add the marker or narration.`
 
@@ -886,21 +893,43 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	sawReply := false
 	newSession := ""
-	for sc.Scan() {
-		line := sc.Bytes()
-		if strings.Contains(string(line), "session_id") {
-			var m map[string]interface{}
-			if json.Unmarshal(line, &m) == nil {
-				if s, ok := m["session_id"].(string); ok && s != "" {
-					newSession = s
+	lines := make(chan []byte, 64)
+	go func() {
+		defer close(lines)
+		for sc.Scan() {
+			b := make([]byte, len(sc.Bytes()))
+			copy(b, sc.Bytes())
+			lines <- b
+		}
+	}()
+	heartbeat := time.NewTicker(60 * time.Second)
+	defer heartbeat.Stop()
+	hbn := 0
+	scanning := true
+	for scanning {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				scanning = false
+				break
+			}
+			if strings.Contains(string(line), "session_id") {
+				var m map[string]interface{}
+				if json.Unmarshal(line, &m) == nil {
+					if s, ok := m["session_id"].(string); ok && s != "" {
+						newSession = s
+					}
 				}
 			}
-		}
-		for _, e := range transform(line) {
-			if strings.Contains(string(e), `"t":"reply"`) {
-				sawReply = true
+			for _, e := range transform(line) {
+				if strings.Contains(string(e), `"t":"reply"`) {
+					sawReply = true
+				}
+				emit(e)
 			}
-			emit(e)
+		case <-heartbeat.C:
+			emit(mustJSON(map[string]string{"t": "working", "text": working[hbn%len(working)]}))
+			hbn++
 		}
 	}
 	cmd.Wait()

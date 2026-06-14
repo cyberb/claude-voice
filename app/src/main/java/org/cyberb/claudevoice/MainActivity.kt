@@ -631,6 +631,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         when (o.optString("t")) {
             "action" -> appendAction(o.optString("label"))
             "diff" -> appendDiff(o.optString("file"), o.optString("patch"))
+            "working" -> {
+                val t = o.optString("text")
+                appendAction(t)
+                if (speakStatusOn()) tts.speak(t, TextToSpeech.QUEUE_ADD, null, "working")
+            }
             "usage" -> {
                 tokIn = o.optInt("in", tokIn)
                 tokOut = o.optInt("out", tokOut)

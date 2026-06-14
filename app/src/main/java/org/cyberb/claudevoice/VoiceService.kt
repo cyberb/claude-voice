@@ -55,7 +55,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val http = OkHttpClient.Builder()
-        .callTimeout(200, TimeUnit.SECONDS).readTimeout(200, TimeUnit.SECONDS).build()
+        .connectTimeout(15, TimeUnit.SECONDS).callTimeout(0, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS).build()
     private val jsonType = "application/json".toMediaType()
     private val sampleRate = 16000
     private val recording = AtomicBoolean(false)
@@ -190,6 +190,12 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
     private val starting = AtomicBoolean(false)
     private var commDeviceSet = false
     private val beginRunnable = Runnable { starting.set(false); beginRecord(true) }
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            if (prefs().getBoolean("speakStatus", true)) tts?.speak("still working", TextToSpeech.QUEUE_ADD, null, "cue")
+            handler.postDelayed(this, 60000)
+        }
+    }
 
     private fun btMic() = prefs().getBoolean("btmic", false)
 
@@ -258,9 +264,10 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
         if (aid < 0) { notify("no agent — open the app"); return }
         notify("thinking…")
         tts?.speak("thinking", TextToSpeech.QUEUE_FLUSH, null, "cue")
+        handler.postDelayed(heartbeat, 60000)
         turnJob = scope.launch {
             val said = post("${base()}/stt", wav(audio).toRequestBody("audio/wav".toMediaType()))
-            if (said.isNullOrBlank()) { notify("speech-to-text failed"); return@launch }
+            if (said.isNullOrBlank()) { handler.removeCallbacks(heartbeat); notify("speech-to-text failed"); return@launch }
             broadcast("you", said)
             val narrate = prefs().getBoolean("narrate_$aid", false)
             val payload = JSONObject().put("text", said).put("agent", aid).put("narrate", narrate).toString().toRequestBody(jsonType)
@@ -284,6 +291,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
                     }
                 } catch (e: Exception) { /* dropped */ } finally { currentCall = null }
             }
+            handler.removeCallbacks(heartbeat)
             val toSpeak = if (speech.isNotBlank()) speech else clean(replyText)
             if (toSpeak.isBlank()) { notify("no response"); return@launch }
             broadcast("reply", if (replyText.isNotBlank()) replyText else toSpeak)
