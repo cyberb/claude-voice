@@ -15,15 +15,32 @@ tools — and the app is a thin voice front-end that reaches it over localhost.
   <em>Left: hold-to-talk, watch the agent stream edits, hear the reply. Right: switch between agents, one per repo.</em>
 </p>
 
-```
-            ┌──────────────────── one phone ────────────────────┐
-  Android app (this repo)                Termux (bridge/)
-  ┌───────────────────────┐   POST /stt  ┌──────────────────────┐
-  │ hold-to-talk button   │──(wav)──────▶│ whisper.cpp  → text  │
-  │ transcript (in/out)   │              │                      │
-  │ Android TextToSpeech  │◀──(reply)────│ claude -p --continue │
-  │                       │──POST /chat─▶│  (your repo + tools) │
-  └───────────────────────┘   127.0.0.1  └──────────────────────┘
+```mermaid
+flowchart LR
+  subgraph phone["📱 one phone — nothing leaves the device"]
+    direction LR
+    subgraph app["Android app · this repo"]
+      direction TB
+      mic["🎙️ hold-to-talk<br/>16 kHz mono wav"]
+      tx["📝 transcript"]
+      spk["🔊 text-to-speech"]
+    end
+    subgraph bridge["Termux · bridge/ · Go · 127.0.0.1:8765"]
+      direction TB
+      stt["whisper.cpp<br/>speech → text"]
+      agent["claude -p --continue<br/>your repos + tools"]
+    end
+  end
+
+  mic -- "POST /stt" --> stt
+  stt -- "text" --> tx
+  tx -- "POST /chat" --> agent
+  agent -- "reply (streamed)" --> spk
+
+  classDef appbox fill:#ede9fe,stroke:#7c3aed,color:#1e1b4b;
+  classDef bridgebox fill:#ecfdf5,stroke:#059669,color:#064e3b;
+  class mic,tx,spk appbox;
+  class stt,agent bridgebox;
 ```
 
 Why this shape: no Android app is itself a coding agent — the brain must run in
