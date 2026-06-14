@@ -896,6 +896,7 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	sawReply := false
+	sentModel := false
 	newSession := ""
 	lines := make(chan []byte, 64)
 	go func() {
@@ -922,6 +923,21 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 				if json.Unmarshal(line, &m) == nil {
 					if s, ok := m["session_id"].(string); ok && s != "" {
 						newSession = s
+					}
+				}
+			}
+			if !sentModel && strings.Contains(string(line), `"model"`) {
+				var m map[string]interface{}
+				if json.Unmarshal(line, &m) == nil {
+					name, _ := m["model"].(string)
+					if name == "" {
+						if msg, ok := m["message"].(map[string]interface{}); ok {
+							name, _ = msg["model"].(string)
+						}
+					}
+					if name != "" {
+						sentModel = true
+						emit(mustJSON(map[string]string{"t": "model", "name": name}))
 					}
 				}
 			}

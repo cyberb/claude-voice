@@ -102,12 +102,14 @@ class MainView(private val host: VoiceHost, root: View) {
     }
 
     private fun showModelPicker() {
+        val id = host.currentAgentId ?: return
         val labels = MODELS.map { if (it.isBlank()) activity.getString(R.string.model_default) else it }.toTypedArray()
-        val checked = MODELS.indexOf(model()).coerceAtLeast(0)
+        val checked = MODELS.indexOf(model(id)).coerceAtLeast(0)
         AlertDialog.Builder(activity)
             .setTitle(R.string.model_title)
             .setSingleChoiceItems(labels, checked) { dlg, which ->
-                prefs().edit().putString("model", MODELS[which]).apply()
+                prefs().edit().putString("model_$id", MODELS[which]).apply()
+                host.modelByAgent.remove(id)
                 updateBottom()
                 dlg.dismiss()
             }
@@ -115,8 +117,16 @@ class MainView(private val host: VoiceHost, root: View) {
             .show()
     }
 
-    private fun model() = prefs().getString("model", "") ?: ""
-    private fun modelLabel() = model().ifBlank { activity.getString(R.string.model_default) }
+    private fun model(id: Int) = prefs().getString("model_$id", "") ?: ""
+
+    private fun modelLabel(): String {
+        val id = host.currentAgentId ?: return activity.getString(R.string.model_default)
+        host.modelByAgent[id]?.let { return it }
+        return model(id).ifBlank { activity.getString(R.string.model_default) }
+    }
+
+    private fun fmtModel(raw: String): String =
+        Regex("-\\d{8}$").replace(raw.removePrefix("claude-"), "")
 
     fun onServiceEvent(type: String, text: String) {
         when (type) {
@@ -263,7 +273,7 @@ class MainView(private val host: VoiceHost, root: View) {
     private suspend fun streamChat(aid: Int, text: String) {
         val narrate = prefs().getBoolean("narrate_$aid", false)
         var sawReply = false
-        val ok = http.chat(text, aid, narrate, model().ifBlank { null }) { event ->
+        val ok = http.chat(text, aid, narrate, model(aid).ifBlank { null }) { event ->
             if (event is ChatEvent.Reply) sawReply = true
             withContext(Dispatchers.Main) { handleEvent(event) }
         }
@@ -277,6 +287,12 @@ class MainView(private val host: VoiceHost, root: View) {
             is ChatEvent.Working -> {
                 appendAction(e.text)
                 audio.speakWorking(e.text)
+            }
+            is ChatEvent.Model -> {
+                if (e.name.isNotBlank()) {
+                    host.modelByAgent[host.currentAgentId ?: -1] = fmtModel(e.name)
+                    updateBottom()
+                }
             }
             is ChatEvent.Usage -> {
                 e.tokIn?.let { tokIn = it }

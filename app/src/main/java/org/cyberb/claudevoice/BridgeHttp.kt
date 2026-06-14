@@ -33,6 +33,7 @@ sealed class ChatEvent {
     @Serializable @SerialName("action") data class Action(val label: String = "") : ChatEvent()
     @Serializable @SerialName("diff") data class Diff(val file: String = "", val patch: String = "") : ChatEvent()
     @Serializable @SerialName("working") data class Working(val text: String = "") : ChatEvent()
+    @Serializable @SerialName("model") data class Model(val name: String = "") : ChatEvent()
     @Serializable @SerialName("usage") data class Usage(
         @SerialName("in") val tokIn: Int? = null,
         @SerialName("out") val tokOut: Int? = null,

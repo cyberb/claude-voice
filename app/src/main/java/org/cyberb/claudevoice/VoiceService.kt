@@ -261,7 +261,7 @@ class VoiceService : Service(), TextToSpeech.OnInitListener {
             val narrate = prefs().getBoolean("narrate_$aid", false)
             var replyText = ""
             var speech = ""
-            val model = prefs().getString("model", "")?.ifBlank { null }
+            val model = prefs().getString("model_$aid", "")?.ifBlank { null }
             http.chat(said, aid, narrate, model) { ev ->
                 if (ev is ChatEvent.Reply) { replyText = ev.text; speech = ev.speech }
             }

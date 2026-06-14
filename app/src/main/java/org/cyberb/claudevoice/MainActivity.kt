@@ -40,6 +40,7 @@ interface VoiceHost {
     var currentAgentId: Int?
     val transcripts: MutableMap<Int, SpannableStringBuilder>
     val ctxByAgent: MutableMap<Int, Pair<Int, Int>>
+    val modelByAgent: MutableMap<Int, String>
     val mainView: MainView
     val drawerView: AgentDrawer
     fun prefs(): SharedPreferences
@@ -55,6 +56,7 @@ class MainActivity : AppCompatActivity(), VoiceHost {
     override var currentAgentId: Int? = null
     override val transcripts = mutableMapOf<Int, SpannableStringBuilder>()
     override val ctxByAgent = mutableMapOf<Int, Pair<Int, Int>>()
+    override val modelByAgent = mutableMapOf<Int, String>()
     override lateinit var mainView: MainView
     override lateinit var drawerView: AgentDrawer
 
