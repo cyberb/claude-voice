@@ -40,7 +40,7 @@ sealed class ChatEvent {
     ) : ChatEvent()
 }
 
-@Serializable private data class ChatRequest(val text: String, val agent: Int, val narrate: Boolean)
+@Serializable private data class ChatRequest(val text: String, val agent: Int, val narrate: Boolean, val model: String? = null)
 @Serializable private data class AddAgentRequest(val dir: String, val session: String? = null)
 @Serializable private data class TtsRequest(val text: String, val voice: String? = null)
 
@@ -88,8 +88,8 @@ class BridgeHttp(
 
     suspend fun stt(wav: ByteArray): String? = post("/stt", wav.toRequestBody(wavType))
 
-    suspend fun chat(text: String, agentId: Int, narrate: Boolean, onEvent: suspend (ChatEvent) -> Unit): Boolean {
-        val payload = encode(ChatRequest(text, agentId, narrate)).json()
+    suspend fun chat(text: String, agentId: Int, narrate: Boolean, model: String?, onEvent: suspend (ChatEvent) -> Unit): Boolean {
+        val payload = encode(ChatRequest(text, agentId, narrate, model)).json()
         return stream("/chat", payload) { line ->
             decode<ChatEvent>(line)?.let { onEvent(it) }
         }

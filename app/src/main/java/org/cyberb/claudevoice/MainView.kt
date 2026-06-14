@@ -37,6 +37,8 @@ class MainView(private val host: VoiceHost, root: View) {
 
     private val fmt = TextFormat(activity)
 
+    private val MODELS = listOf("", "opus", "sonnet", "haiku")
+
     private val audio = AudioEngine(
         host,
         onReady = { setBusy(false); setStatus("ready") },
@@ -84,6 +86,7 @@ class MainView(private val host: VoiceHost, root: View) {
         val items = arrayOf(
             activity.getString(R.string.action_clear),
             activity.getString(R.string.action_compact),
+            activity.getString(R.string.action_model, modelLabel()),
         )
         AlertDialog.Builder(activity)
             .setTitle(R.string.actions_title)
@@ -91,11 +94,29 @@ class MainView(private val host: VoiceHost, root: View) {
                 when (which) {
                     0 -> clearAgent()
                     1 -> compactAgent()
+                    2 -> showModelPicker()
                 }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
+
+    private fun showModelPicker() {
+        val labels = MODELS.map { if (it.isBlank()) activity.getString(R.string.model_default) else it }.toTypedArray()
+        val checked = MODELS.indexOf(model()).coerceAtLeast(0)
+        AlertDialog.Builder(activity)
+            .setTitle(R.string.model_title)
+            .setSingleChoiceItems(labels, checked) { dlg, which ->
+                prefs().edit().putString("model", MODELS[which]).apply()
+                updateBottom()
+                dlg.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun model() = prefs().getString("model", "") ?: ""
+    private fun modelLabel() = model().ifBlank { activity.getString(R.string.model_default) }
 
     fun onServiceEvent(type: String, text: String) {
         when (type) {
@@ -209,7 +230,7 @@ class MainView(private val host: VoiceHost, root: View) {
         workdir.text = shortPath(a.dir)
         val b = a.branch?.let { it + if (a.dirty) " ✗" else "" } ?: ""
         branch.visibility = View.VISIBLE
-        branch.text = (b + "   🎙 " + audio.micLabel()).trim()
+        branch.text = (b + "   🎙 " + audio.micLabel() + "   ⚙ " + modelLabel()).trim()
         branch.setTextColor(ContextCompat.getColor(activity,
             if (a.dirty) R.color.branch_dirty else R.color.branch_text))
     }
@@ -242,7 +263,7 @@ class MainView(private val host: VoiceHost, root: View) {
     private suspend fun streamChat(aid: Int, text: String) {
         val narrate = prefs().getBoolean("narrate_$aid", false)
         var sawReply = false
-        val ok = http.chat(text, aid, narrate) { event ->
+        val ok = http.chat(text, aid, narrate, model().ifBlank { null }) { event ->
             if (event is ChatEvent.Reply) sawReply = true
             withContext(Dispatchers.Main) { handleEvent(event) }
         }

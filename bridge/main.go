@@ -838,6 +838,7 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		Text    string `json:"text"`
 		Agent   *int   `json:"agent"`
 		Narrate *bool  `json:"narrate"`
+		Model   string `json:"model"`
 	}
 	json.NewDecoder(r.Body).Decode(&p)
 	id := 0
@@ -871,6 +872,9 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	args := []string{"-p", "--output-format", "stream-json", "--verbose"}
 	if resume != "" {
 		args = append(args, "--resume", resume)
+	}
+	if strings.TrimSpace(p.Model) != "" {
+		args = append(args, "--model", p.Model)
 	}
 	doNarrate := narrateOn
 	if p.Narrate != nil {

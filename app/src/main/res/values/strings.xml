@@ -26,6 +26,9 @@
     <string name="overflow_dots">⋮</string>
     <string name="scroll_down">Scroll to bottom</string>
     <string name="actions_title">Conversation</string>
+    <string name="action_model">Model: %1$s</string>
+    <string name="model_title">Model</string>
+    <string name="model_default">default</string>
     <string name="action_clear">Clear conversation</string>
     <string name="action_compact">Compact conversation</string>
     <string name="background_mode">Background mode (screen off)</string>
