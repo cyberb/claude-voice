@@ -2,8 +2,10 @@ package org.cyberb.claudevoice
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -55,8 +57,61 @@ class AudioEngine(
         .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "claudevoice:speak")
         .apply { setReferenceCounted(false) }
 
-    private fun holdWake() { try { wakeLock.acquire(16 * 60 * 1000L) } catch (e: Exception) { } }
-    private fun releaseWake() { try { if (wakeLock.isHeld) wakeLock.release() } catch (e: Exception) { } }
+    private val mediaAttrs = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { }
+    private var focusReq: AudioFocusRequest? = null
+    private var turnActive = false
+
+    private fun requestFocus() {
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(mediaAttrs)
+                    .setOnAudioFocusChangeListener(focusListener)
+                    .build()
+                focusReq = req
+                audioManager.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+            }
+        } catch (e: Exception) { }
+    }
+
+    private fun abandonFocus() {
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                focusReq?.let { audioManager.abandonAudioFocusRequest(it) }
+                focusReq = null
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(focusListener)
+            }
+        } catch (e: Exception) { }
+    }
+
+    private fun holdWake() {
+        try { wakeLock.acquire(16 * 60 * 1000L) } catch (e: Exception) { }
+        if (!turnActive) {
+            turnActive = true
+            requestFocus()
+            PlaybackService.start(activity)
+        }
+    }
+
+    private fun releaseWake() {
+        try { if (wakeLock.isHeld) wakeLock.release() } catch (e: Exception) { }
+        if (turnActive) {
+            turnActive = false
+            abandonFocus()
+            PlaybackService.stop(activity)
+        }
+    }
+
     private fun ready() { releaseWake(); onReady() }
 
     fun beginTurn() = holdWake()
@@ -75,6 +130,7 @@ class AudioEngine(
     override fun onInit(statusCode: Int) {
         if (statusCode != TextToSpeech.SUCCESS) return
         tts.language = Locale.US
+        tts.setAudioAttributes(mediaAttrs)
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) { if (utteranceId == "reply") activity.runOnUiThread { ready() } }
@@ -213,6 +269,7 @@ class AudioEngine(
             stopPlayer()
             val mp = MediaPlayer()
             player = mp
+            mp.setAudioAttributes(mediaAttrs)
             mp.setWakeMode(activity, PowerManager.PARTIAL_WAKE_LOCK)
             mp.setDataSource(f.absolutePath)
             mp.setOnCompletionListener {
