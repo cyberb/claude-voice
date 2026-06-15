@@ -1,9 +1,16 @@
 package bridge
 
-import "net/http"
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
 
-// Server wires HTTP routes to a Handlers implementation. It holds no business
-// logic itself — only the routing table.
+// Server adapts the pure Handlers business logic to HTTP routes. All knowledge
+// of net/http — request parsing, status codes, response encoding — lives here.
 type Server struct {
 	addr string
 	h    *Handlers
@@ -14,23 +21,215 @@ func NewServer(addr string, h *Handlers) *Server {
 	return &Server{addr: addr, h: h}
 }
 
-// Handler builds the route table mapping each path to a Handlers method.
+// Handler builds the route table mapping each path to a Server method.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", s.h.Health)
-	mux.HandleFunc("/agents", s.h.Agents)
-	mux.HandleFunc("/agents/", s.h.AgentByID)
-	mux.HandleFunc("/ls", s.h.Ls)
-	mux.HandleFunc("/sessions", s.h.Sessions)
-	mux.HandleFunc("/history", s.h.History)
-	mux.HandleFunc("/stt", s.h.Stt)
-	mux.HandleFunc("/chat", s.h.Chat)
-	mux.HandleFunc("/tts", s.h.Tts)
-	mux.HandleFunc("/voices", s.h.Voices)
+	mux.HandleFunc("/health", s.health)
+	mux.HandleFunc("/agents", s.agents)
+	mux.HandleFunc("/agents/", s.agentByID)
+	mux.HandleFunc("/ls", s.ls)
+	mux.HandleFunc("/sessions", s.sessions)
+	mux.HandleFunc("/history", s.history)
+	mux.HandleFunc("/stt", s.stt)
+	mux.HandleFunc("/chat", s.chat)
+	mux.HandleFunc("/tts", s.tts)
+	mux.HandleFunc("/voices", s.voices)
 	return mux
 }
 
 // ListenAndServe starts the HTTP server on the configured address.
 func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(s.addr, s.Handler())
+}
+
+func writeText(w http.ResponseWriter, code int, body string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(code)
+	io.WriteString(w, body)
+}
+
+func writeJSON(w http.ResponseWriter, code int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
+}
+
+func mustJSON(v interface{}) []byte {
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func normalizeDir(dir string) string {
+	dir = expand(strings.TrimSpace(dir))
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return dir
+}
+
+func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	writeText(w, 200, "ok")
+}
+
+func (s *Server) voices(w http.ResponseWriter, r *http.Request) {
+	if !s.h.piperEnabled() {
+		writeJSON(w, 200, []string{})
+		return
+	}
+	writeJSON(w, 200, s.h.listVoices())
+}
+
+func (s *Server) tts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	if !s.h.piperEnabled() {
+		writeText(w, 501, "piper not configured")
+		return
+	}
+	var p ttsReq
+	json.NewDecoder(r.Body).Decode(&p)
+	if strings.TrimSpace(p.Text) == "" {
+		writeText(w, 400, "empty text")
+		return
+	}
+	wav, err := s.h.synth(p.Text, p.Voice)
+	if err != nil {
+		writeText(w, 500, "tts failed")
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
+	w.WriteHeader(200)
+	w.Write(wav)
+}
+
+func (s *Server) agents(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, 200, s.h.agentList())
+	case http.MethodPost:
+		var p agentReq
+		json.NewDecoder(r.Body).Decode(&p)
+		if strings.TrimSpace(p.Dir) == "" {
+			writeText(w, 400, "missing dir")
+			return
+		}
+		aid := s.h.AddAgent(p.Dir)
+		if p.Session != "" {
+			s.h.SetSession(aid, p.Session)
+		}
+		writeJSON(w, 200, s.h.agentList())
+	default:
+		writeText(w, 405, "method not allowed")
+	}
+}
+
+func (s *Server) agentByID(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/agents/")
+	if strings.HasSuffix(rest, "/compact") {
+		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/compact"))
+		if err != nil {
+			writeText(w, 400, "bad id")
+			return
+		}
+		summary, ok := s.h.compactAgent(id)
+		if !ok {
+			writeText(w, 500, "compact failed")
+			return
+		}
+		writeJSON(w, 200, compactResp{Summary: summary})
+		return
+	}
+	if strings.HasSuffix(rest, "/clear") {
+		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/clear"))
+		if err != nil {
+			writeText(w, 400, "bad id")
+			return
+		}
+		s.h.SetSession(id, "")
+		writeText(w, 200, "ok")
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeText(w, 404, "not found")
+		return
+	}
+	id, err := strconv.Atoi(rest)
+	if err != nil {
+		writeText(w, 400, "bad id")
+		return
+	}
+	s.h.DeleteAgent(id)
+	writeJSON(w, 200, s.h.agentList())
+}
+
+func (s *Server) stt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	body, _ := io.ReadAll(r.Body)
+	writeText(w, 200, s.h.transcribe(body))
+}
+
+func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	if dir == "" {
+		dir = home()
+	}
+	writeJSON(w, 200, listSessions(normalizeDir(dir)))
+}
+
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeText(w, 400, "missing id")
+		return
+	}
+	writeJSON(w, 200, historyEvents(normalizeDir(r.URL.Query().Get("dir")), id))
+}
+
+func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
+	if dir == "" {
+		dir = home()
+	}
+	listing, err := listDir(normalizeDir(dir))
+	if err != nil {
+		writeText(w, 400, "cannot read dir")
+		return
+	}
+	writeJSON(w, 200, listing)
+}
+
+func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeText(w, 405, "method not allowed")
+		return
+	}
+	var p chatReq
+	json.NewDecoder(r.Body).Decode(&p)
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	flusher, _ := w.(http.Flusher)
+	s.h.RunChat(p, func(e Event) {
+		w.Write(mustJSON(e))
+		w.Write([]byte("\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	})
 }

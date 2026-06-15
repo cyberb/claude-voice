@@ -5,13 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +30,9 @@ type agent struct {
 	session string
 }
 
-// Handlers is the implementation behind the HTTP routes: it owns the bridge
-// config and the in-memory agent registry, and shells out to claude/whisper/piper.
+// Handlers owns the bridge config and the in-memory agent registry, and shells
+// out to claude/whisper/piper. It deals only in normal Go types and has no
+// knowledge of HTTP — the Server adapts these methods to routes.
 type Handlers struct {
 	cfg    Config
 	mu     sync.Mutex
@@ -64,6 +62,22 @@ func (h *Handlers) AddAgent(dir string) int {
 	h.nextID++
 	h.agents[id] = &agent{dir: dir}
 	return id
+}
+
+// SetSession records the claude session id for an agent (no-op if unknown).
+func (h *Handlers) SetSession(id int, session string) {
+	h.mu.Lock()
+	if a := h.agents[id]; a != nil {
+		a.session = session
+	}
+	h.mu.Unlock()
+}
+
+// DeleteAgent removes an agent from the registry.
+func (h *Handlers) DeleteAgent(id int) {
+	h.mu.Lock()
+	delete(h.agents, id)
+	h.mu.Unlock()
 }
 
 func gitinfo(dir string) (string, bool) {
@@ -194,11 +208,6 @@ func diffPatch(name string, in toolInput) (string, string, bool) {
 	return "", "", false
 }
 
-func mustJSON(v interface{}) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}
-
 // transformEvent turns one parsed claude stream-json event into the typed
 // events the app consumes.
 func transformEvent(ev streamEvent) []Event {
@@ -299,81 +308,6 @@ func (h *Handlers) synth(text, voice string) ([]byte, error) {
 	return os.ReadFile(wav)
 }
 
-func writeText(w http.ResponseWriter, code int, body string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(code)
-	io.WriteString(w, body)
-}
-
-func writeJSON(w http.ResponseWriter, code int, v interface{}) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
-}
-
-func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
-	writeText(w, 200, "ok")
-}
-
-func (h *Handlers) Voices(w http.ResponseWriter, r *http.Request) {
-	if !h.piperEnabled() {
-		writeJSON(w, 200, []string{})
-		return
-	}
-	writeJSON(w, 200, h.listVoices())
-}
-
-func (h *Handlers) Tts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeText(w, 405, "method not allowed")
-		return
-	}
-	if !h.piperEnabled() {
-		writeText(w, 501, "piper not configured")
-		return
-	}
-	var p ttsReq
-	json.NewDecoder(r.Body).Decode(&p)
-	if strings.TrimSpace(p.Text) == "" {
-		writeText(w, 400, "empty text")
-		return
-	}
-	wav, err := h.synth(p.Text, p.Voice)
-	if err != nil {
-		writeText(w, 500, "tts failed")
-		return
-	}
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Length", strconv.Itoa(len(wav)))
-	w.WriteHeader(200)
-	w.Write(wav)
-}
-
-func (h *Handlers) Agents(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, 200, h.agentList())
-	case http.MethodPost:
-		var p agentReq
-		json.NewDecoder(r.Body).Decode(&p)
-		if strings.TrimSpace(p.Dir) == "" {
-			writeText(w, 400, "missing dir")
-			return
-		}
-		aid := h.AddAgent(p.Dir)
-		if p.Session != "" {
-			h.mu.Lock()
-			if h.agents[aid] != nil {
-				h.agents[aid].session = p.Session
-			}
-			h.mu.Unlock()
-		}
-		writeJSON(w, 200, h.agentList())
-	default:
-		writeText(w, 405, "method not allowed")
-	}
-}
-
 func (h *Handlers) runClaudeSession(dir, resume, text string) (string, string, error) {
 	args := []string{"-p", "--output-format", "json"}
 	if resume != "" {
@@ -422,61 +356,6 @@ func (h *Handlers) compactAgent(id int) (string, bool) {
 	}
 	h.mu.Unlock()
 	return summary, true
-}
-
-// AgentByID handles /agents/<id>, /agents/<id>/compact and /agents/<id>/clear.
-func (h *Handlers) AgentByID(w http.ResponseWriter, r *http.Request) {
-	rest := strings.TrimPrefix(r.URL.Path, "/agents/")
-	if strings.HasSuffix(rest, "/compact") {
-		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/compact"))
-		if err != nil {
-			writeText(w, 400, "bad id")
-			return
-		}
-		summary, ok := h.compactAgent(id)
-		if !ok {
-			writeText(w, 500, "compact failed")
-			return
-		}
-		writeJSON(w, 200, compactResp{Summary: summary})
-		return
-	}
-	if strings.HasSuffix(rest, "/clear") {
-		id, err := strconv.Atoi(strings.TrimSuffix(rest, "/clear"))
-		if err != nil {
-			writeText(w, 400, "bad id")
-			return
-		}
-		h.mu.Lock()
-		if a := h.agents[id]; a != nil {
-			a.session = ""
-		}
-		h.mu.Unlock()
-		writeText(w, 200, "ok")
-		return
-	}
-	if r.Method != http.MethodDelete {
-		writeText(w, 404, "not found")
-		return
-	}
-	id, err := strconv.Atoi(rest)
-	if err != nil {
-		writeText(w, 400, "bad id")
-		return
-	}
-	h.mu.Lock()
-	delete(h.agents, id)
-	h.mu.Unlock()
-	writeJSON(w, 200, h.agentList())
-}
-
-func (h *Handlers) Stt(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeText(w, 405, "method not allowed")
-		return
-	}
-	body, _ := io.ReadAll(r.Body)
-	writeText(w, 200, h.transcribe(body))
 }
 
 func encodeDir(d string) string {
@@ -541,22 +420,6 @@ func listSessions(dir string) []sessionInfo {
 	return out
 }
 
-func (h *Handlers) Sessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeText(w, 405, "method not allowed")
-		return
-	}
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
-	if dir == "" {
-		dir = home()
-	}
-	dir = expand(dir)
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	writeJSON(w, 200, listSessions(dir))
-}
-
 func historyEvents(dir, id string) []Event {
 	path := filepath.Join(home(), ".claude", "projects", encodeDir(dir), id+".jsonl")
 	f, err := os.Open(path)
@@ -612,40 +475,10 @@ func historyEvents(dir, id string) []Event {
 	return out
 }
 
-func (h *Handlers) History(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeText(w, 405, "method not allowed")
-		return
-	}
-	dir := expand(strings.TrimSpace(r.URL.Query().Get("dir")))
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeText(w, 400, "missing id")
-		return
-	}
-	writeJSON(w, 200, historyEvents(dir, id))
-}
-
-func (h *Handlers) Ls(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeText(w, 405, "method not allowed")
-		return
-	}
-	dir := strings.TrimSpace(r.URL.Query().Get("dir"))
-	if dir == "" {
-		dir = home()
-	}
-	dir = expand(dir)
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
+func listDir(dir string) (dirListing, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		writeText(w, 400, "cannot read dir")
-		return
+		return dirListing{}, err
 	}
 	dirs := []string{}
 	for _, e := range entries {
@@ -658,16 +491,13 @@ func (h *Handlers) Ls(w http.ResponseWriter, r *http.Request) {
 	if p := filepath.Dir(dir); p != dir {
 		parent = &p
 	}
-	writeJSON(w, 200, dirListing{Dir: dir, Parent: parent, Dirs: dirs})
+	return dirListing{Dir: dir, Parent: parent, Dirs: dirs}, nil
 }
 
-func (h *Handlers) Chat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeText(w, 405, "method not allowed")
-		return
-	}
-	var p chatReq
-	json.NewDecoder(r.Body).Decode(&p)
+// RunChat runs a claude streaming turn for the request and delivers each typed
+// event to emit. It blocks until the turn completes and persists the resulting
+// session id. emit must be safe to call from this goroutine only.
+func (h *Handlers) RunChat(p chatReq, emit func(Event)) {
 	id := 0
 	if p.Agent != nil {
 		id = *p.Agent
@@ -682,15 +512,6 @@ func (h *Handlers) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	flusher, _ := w.(http.Flusher)
-	emit := func(e Event) {
-		w.Write(mustJSON(e))
-		w.Write([]byte("\n"))
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
 	if a == nil || strings.TrimSpace(p.Text) == "" {
 		emit(Event{T: "reply", Text: "Unknown agent."})
 		return
