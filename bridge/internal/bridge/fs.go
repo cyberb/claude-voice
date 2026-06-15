@@ -1,0 +1,231 @@
+package bridge
+
+import (
+	"bufio"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// FS is the bridge's gateway to the local filesystem. It owns every disk
+// operation the bridge performs — from low-level reads up to the high-level
+// voice, session and history listings — so the handlers stay free of I/O and
+// there is a single seam for tests to stub.
+type FS struct {
+	home        string
+	piperBin    string
+	piperVoices string
+	piperModel  string
+}
+
+// NewFS returns an FS backed by the real operating-system filesystem, resolving
+// the paths it needs from cfg.
+func NewFS(cfg Config) *FS {
+	return &FS{
+		home:        home(),
+		piperBin:    cfg.PiperBin,
+		piperVoices: cfg.PiperVoices,
+		piperModel:  cfg.PiperModel,
+	}
+}
+
+// Exists reports whether path can be stat'd.
+func (*FS) Exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// ReadFile returns the contents of the named file.
+func (*FS) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// WriteFile writes data to the named file, creating it 0600 if needed.
+func (*FS) WriteFile(path string, data []byte) error { return os.WriteFile(path, data, 0o600) }
+
+// ReadDir lists the directory entries of path, sorted by filename.
+func (*FS) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path) }
+
+// Open opens the named file for reading.
+func (*FS) Open(path string) (*os.File, error) { return os.Open(path) }
+
+// TempDir creates a new temporary directory and returns its path.
+func (*FS) TempDir(pattern string) (string, error) { return os.MkdirTemp("", pattern) }
+
+// RemoveAll removes path and any children it contains.
+func (*FS) RemoveAll(path string) error { return os.RemoveAll(path) }
+
+// PiperEnabled reports whether the piper binary is present.
+func (f *FS) PiperEnabled() bool { return f.Exists(f.piperBin) }
+
+// ListVoices returns the names of the .onnx voices available to piper, sorted.
+func (f *FS) ListVoices() []string {
+	entries, err := f.ReadDir(f.piperVoices)
+	if err != nil {
+		return []string{}
+	}
+	out := []string{}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".onnx") {
+			out = append(out, strings.TrimSuffix(e.Name(), ".onnx"))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ResolveVoice picks the piper voice model file to use: the named voice if it
+// exists, else the explicit configured model, else the first available voice.
+func (f *FS) ResolveVoice(name string) string {
+	if name != "" {
+		if p := filepath.Join(f.piperVoices, name+".onnx"); f.Exists(p) {
+			return p
+		}
+	}
+	if f.piperModel != "" && f.Exists(f.piperModel) {
+		return f.piperModel
+	}
+	for _, v := range f.ListVoices() {
+		return filepath.Join(f.piperVoices, v+".onnx")
+	}
+	return ""
+}
+
+// ListDir returns the sorted subdirectories of dir plus its parent.
+func (f *FS) ListDir(dir string) (dirListing, error) {
+	entries, err := f.ReadDir(dir)
+	if err != nil {
+		return dirListing{}, err
+	}
+	dirs := []string{}
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e.Name())
+		}
+	}
+	sort.Strings(dirs)
+	var parent *string
+	if p := filepath.Dir(dir); p != dir {
+		parent = &p
+	}
+	return dirListing{Dir: dir, Parent: parent, Dirs: dirs}, nil
+}
+
+// ListSessions returns the most recent claude sessions recorded for dir.
+func (f *FS) ListSessions(dir string) []sessionInfo {
+	proj := filepath.Join(f.home, ".claude", "projects", encodeDir(dir))
+	entries, err := f.ReadDir(proj)
+	if err != nil {
+		return []sessionInfo{}
+	}
+	out := []sessionInfo{}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, sessionInfo{
+			ID:      strings.TrimSuffix(e.Name(), ".jsonl"),
+			Preview: f.sessionPreview(filepath.Join(proj, e.Name())),
+			Mtime:   info.ModTime().Unix(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Mtime > out[j].Mtime })
+	if len(out) > 20 {
+		out = out[:20]
+	}
+	return out
+}
+
+func (f *FS) sessionPreview(path string) string {
+	fh, err := f.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer fh.Close()
+	sc := bufio.NewScanner(fh)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		var ev streamEvent
+		if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.Type != "user" {
+			continue
+		}
+		if s := ev.Message.textContent(); strings.TrimSpace(s) != "" {
+			return trunc(s, 70)
+		}
+		for _, b := range ev.Message.blocks() {
+			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+				return trunc(b.Text, 70)
+			}
+		}
+	}
+	return ""
+}
+
+// History returns the transcript events recorded for session id under dir.
+func (f *FS) History(dir, id string) []Event {
+	path := filepath.Join(f.home, ".claude", "projects", encodeDir(dir), id+".jsonl")
+	fh, err := f.Open(path)
+	if err != nil {
+		return []Event{}
+	}
+	defer fh.Close()
+	out := []Event{}
+	sc := bufio.NewScanner(fh)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		var ev streamEvent
+		if json.Unmarshal(sc.Bytes(), &ev) != nil {
+			continue
+		}
+		switch ev.Type {
+		case "user":
+			if s := ev.Message.textContent(); strings.TrimSpace(s) != "" {
+				out = append(out, Event{T: "you", Text: s})
+				continue
+			}
+			for _, b := range ev.Message.blocks() {
+				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+					out = append(out, Event{T: "you", Text: b.Text})
+				}
+			}
+		case "assistant":
+			for _, b := range ev.Message.blocks() {
+				switch b.Type {
+				case "text":
+					t := b.Text
+					if strings.TrimSpace(t) == "" {
+						continue
+					}
+					if idx := strings.Index(t, narrateMarker); idx >= 0 {
+						t = strings.TrimSpace(t[:idx])
+					}
+					if t != "" {
+						out = append(out, Event{T: "reply", Text: t})
+					}
+				case "tool_use":
+					out = append(out, Event{T: "action", Label: toolLabel(b.Name, b.Input)})
+					if patch, file, ok := diffPatch(b.Name, b.Input); ok {
+						out = append(out, Event{T: "diff", File: file, Patch: patch})
+					}
+				}
+			}
+		}
+	}
+	if len(out) > 200 {
+		out = out[len(out)-200:]
+	}
+	return out
+}
+
+func encodeDir(d string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '-'
+	}, d)
+}

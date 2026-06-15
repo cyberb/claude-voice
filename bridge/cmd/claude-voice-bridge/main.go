@@ -45,13 +45,14 @@ func run(cfg bridge.Config) error {
 	if start == "" {
 		start = bridge.Home()
 	}
-	h := bridge.NewHandlers(cfg)
+	fs := bridge.NewFS(cfg)
+	h := bridge.NewHandlers(cfg, fs)
 	h.AddAgent(start)
 
 	addr := cfg.Host + ":" + cfg.Port
 	fmt.Printf("claude-voice bridge on http://%s  (perm=%s, start_dir=%s)\n", addr, cfg.Perm, start)
 
-	srv := bridge.NewServer(addr, h)
+	srv := bridge.NewServer(addr, h, fs)
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintln(os.Stderr, "server error:", err)
 		return err

@@ -32,17 +32,20 @@ type agent struct {
 
 // Handlers owns the bridge config and the in-memory agent registry, and shells
 // out to claude/whisper/piper. It deals only in normal Go types and has no
-// knowledge of HTTP — the Server adapts these methods to routes.
+// knowledge of HTTP — the Server adapts these methods to routes. All disk
+// access goes through the injected FS.
 type Handlers struct {
 	cfg    Config
+	fs     *FS
 	mu     sync.Mutex
 	agents map[int]*agent
 	nextID int
 }
 
-// NewHandlers creates a Handlers with the given config and an empty registry.
-func NewHandlers(cfg Config) *Handlers {
-	return &Handlers{cfg: cfg, agents: map[int]*agent{}, nextID: 1}
+// NewHandlers creates a Handlers with the given config, filesystem and an empty
+// registry.
+func NewHandlers(cfg Config, fs *FS) *Handlers {
+	return &Handlers{cfg: cfg, fs: fs, agents: map[int]*agent{}, nextID: 1}
 }
 
 // AddAgent registers (or returns the existing id for) a working directory.
@@ -113,24 +116,24 @@ func (h *Handlers) agentList() []agentInfo {
 		if name == "" || name == string(filepath.Separator) {
 			name = dir
 		}
-		out = append(out, agentInfo{ID: id, Dir: dir, Name: name, Branch: bp, Dirty: dirty, Exists: fileExists(dir)})
+		out = append(out, agentInfo{ID: id, Dir: dir, Name: name, Branch: bp, Dirty: dirty, Exists: h.fs.Exists(dir)})
 	}
 	return out
 }
 
 func (h *Handlers) transcribe(wav []byte) string {
-	d, err := os.MkdirTemp("", "cv")
+	d, err := h.fs.TempDir("cv")
 	if err != nil {
 		return ""
 	}
-	defer os.RemoveAll(d)
+	defer h.fs.RemoveAll(d)
 	in := filepath.Join(d, "in.wav")
 	outp := filepath.Join(d, "out")
-	if err := os.WriteFile(in, wav, 0o600); err != nil {
+	if err := h.fs.WriteFile(in, wav); err != nil {
 		return ""
 	}
 	exec.Command(h.cfg.Whisper, "-m", h.cfg.Model, "-f", in, "-l", "en", "-nt", "-np", "-otxt", "-of", outp).Run()
-	txt, err := os.ReadFile(outp + ".txt")
+	txt, err := h.fs.ReadFile(outp + ".txt")
 	if err != nil {
 		return ""
 	}
@@ -248,56 +251,16 @@ func transformEvent(ev streamEvent) []Event {
 	return out
 }
 
-func (h *Handlers) piperEnabled() bool {
-	_, err := os.Stat(h.cfg.PiperBin)
-	return err == nil
-}
-
-func (h *Handlers) listVoices() []string {
-	entries, err := os.ReadDir(h.cfg.PiperVoices)
-	if err != nil {
-		return []string{}
-	}
-	out := []string{}
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".onnx") {
-			out = append(out, strings.TrimSuffix(e.Name(), ".onnx"))
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func (h *Handlers) resolveVoice(name string) string {
-	if name != "" {
-		if p := filepath.Join(h.cfg.PiperVoices, name+".onnx"); fileExists(p) {
-			return p
-		}
-	}
-	if h.cfg.PiperModel != "" && fileExists(h.cfg.PiperModel) {
-		return h.cfg.PiperModel
-	}
-	for _, v := range h.listVoices() {
-		return filepath.Join(h.cfg.PiperVoices, v+".onnx")
-	}
-	return ""
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
-
 func (h *Handlers) synth(text, voice string) ([]byte, error) {
-	model := h.resolveVoice(voice)
+	model := h.fs.ResolveVoice(voice)
 	if model == "" {
 		return nil, fmt.Errorf("no voice model")
 	}
-	d, err := os.MkdirTemp("", "tts")
+	d, err := h.fs.TempDir("tts")
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(d)
+	defer h.fs.RemoveAll(d)
 	wav := filepath.Join(d, "o.wav")
 	cmd := exec.Command("grun", h.cfg.PiperBin, "-m", model, "--espeak_data", h.cfg.PiperEspeak, "-f", wav)
 	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+h.cfg.PiperLib)
@@ -305,7 +268,7 @@ func (h *Handlers) synth(text, voice string) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
-	return os.ReadFile(wav)
+	return h.fs.ReadFile(wav)
 }
 
 func (h *Handlers) runClaudeSession(dir, resume, text string) (string, string, error) {
@@ -356,142 +319,6 @@ func (h *Handlers) compactAgent(id int) (string, bool) {
 	}
 	h.mu.Unlock()
 	return summary, true
-}
-
-func encodeDir(d string) string {
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '-'
-	}, d)
-}
-
-func sessionPreview(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
-	for sc.Scan() {
-		var ev streamEvent
-		if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.Type != "user" {
-			continue
-		}
-		if s := ev.Message.textContent(); strings.TrimSpace(s) != "" {
-			return trunc(s, 70)
-		}
-		for _, b := range ev.Message.blocks() {
-			if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
-				return trunc(b.Text, 70)
-			}
-		}
-	}
-	return ""
-}
-
-func listSessions(dir string) []sessionInfo {
-	proj := filepath.Join(home(), ".claude", "projects", encodeDir(dir))
-	entries, err := os.ReadDir(proj)
-	if err != nil {
-		return []sessionInfo{}
-	}
-	out := []sessionInfo{}
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		out = append(out, sessionInfo{
-			ID:      strings.TrimSuffix(e.Name(), ".jsonl"),
-			Preview: sessionPreview(filepath.Join(proj, e.Name())),
-			Mtime:   info.ModTime().Unix(),
-		})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Mtime > out[j].Mtime })
-	if len(out) > 20 {
-		out = out[:20]
-	}
-	return out
-}
-
-func historyEvents(dir, id string) []Event {
-	path := filepath.Join(home(), ".claude", "projects", encodeDir(dir), id+".jsonl")
-	f, err := os.Open(path)
-	if err != nil {
-		return []Event{}
-	}
-	defer f.Close()
-	out := []Event{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		var ev streamEvent
-		if json.Unmarshal(sc.Bytes(), &ev) != nil {
-			continue
-		}
-		switch ev.Type {
-		case "user":
-			if s := ev.Message.textContent(); strings.TrimSpace(s) != "" {
-				out = append(out, Event{T: "you", Text: s})
-				continue
-			}
-			for _, b := range ev.Message.blocks() {
-				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
-					out = append(out, Event{T: "you", Text: b.Text})
-				}
-			}
-		case "assistant":
-			for _, b := range ev.Message.blocks() {
-				switch b.Type {
-				case "text":
-					t := b.Text
-					if strings.TrimSpace(t) == "" {
-						continue
-					}
-					if idx := strings.Index(t, narrateMarker); idx >= 0 {
-						t = strings.TrimSpace(t[:idx])
-					}
-					if t != "" {
-						out = append(out, Event{T: "reply", Text: t})
-					}
-				case "tool_use":
-					out = append(out, Event{T: "action", Label: toolLabel(b.Name, b.Input)})
-					if patch, file, ok := diffPatch(b.Name, b.Input); ok {
-						out = append(out, Event{T: "diff", File: file, Patch: patch})
-					}
-				}
-			}
-		}
-	}
-	if len(out) > 200 {
-		out = out[len(out)-200:]
-	}
-	return out
-}
-
-func listDir(dir string) (dirListing, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return dirListing{}, err
-	}
-	dirs := []string{}
-	for _, e := range entries {
-		if e.IsDir() {
-			dirs = append(dirs, e.Name())
-		}
-	}
-	sort.Strings(dirs)
-	var parent *string
-	if p := filepath.Dir(dir); p != dir {
-		parent = &p
-	}
-	return dirListing{Dir: dir, Parent: parent, Dirs: dirs}, nil
 }
 
 // RunChat runs a claude streaming turn for the request and delivers each typed

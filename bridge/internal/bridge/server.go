@@ -14,11 +14,12 @@ import (
 type Server struct {
 	addr string
 	h    *Handlers
+	fs   *FS
 }
 
-// NewServer injects the Handlers implementation behind the routes.
-func NewServer(addr string, h *Handlers) *Server {
-	return &Server{addr: addr, h: h}
+// NewServer injects the Handlers and FS implementations behind the routes.
+func NewServer(addr string, h *Handlers, fs *FS) *Server {
+	return &Server{addr: addr, h: h, fs: fs}
 }
 
 // Handler builds the route table mapping each path to a Server method.
@@ -72,11 +73,11 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) voices(w http.ResponseWriter, r *http.Request) {
-	if !s.h.piperEnabled() {
+	if !s.fs.PiperEnabled() {
 		writeJSON(w, 200, []string{})
 		return
 	}
-	writeJSON(w, 200, s.h.listVoices())
+	writeJSON(w, 200, s.fs.ListVoices())
 }
 
 func (s *Server) tts(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +85,7 @@ func (s *Server) tts(w http.ResponseWriter, r *http.Request) {
 		writeText(w, 405, "method not allowed")
 		return
 	}
-	if !s.h.piperEnabled() {
+	if !s.fs.PiperEnabled() {
 		writeText(w, 501, "piper not configured")
 		return
 	}
@@ -183,7 +184,7 @@ func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	if dir == "" {
 		dir = home()
 	}
-	writeJSON(w, 200, listSessions(normalizeDir(dir)))
+	writeJSON(w, 200, s.fs.ListSessions(normalizeDir(dir)))
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +197,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		writeText(w, 400, "missing id")
 		return
 	}
-	writeJSON(w, 200, historyEvents(normalizeDir(r.URL.Query().Get("dir")), id))
+	writeJSON(w, 200, s.fs.History(normalizeDir(r.URL.Query().Get("dir")), id))
 }
 
 func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +209,7 @@ func (s *Server) ls(w http.ResponseWriter, r *http.Request) {
 	if dir == "" {
 		dir = home()
 	}
-	listing, err := listDir(normalizeDir(dir))
+	listing, err := s.fs.ListDir(normalizeDir(dir))
 	if err != nil {
 		writeText(w, 400, "cannot read dir")
 		return
