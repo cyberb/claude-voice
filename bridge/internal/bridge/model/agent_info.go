@@ -1,4 +1,4 @@
-package models
+package model
 
 // AgentInfo is one entry in the GET /agents response.
 type AgentInfo struct {

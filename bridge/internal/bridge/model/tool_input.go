@@ -1,4 +1,4 @@
-package models
+package model
 
 // ToolInput is the union of tool-call input fields we surface to the app.
 type ToolInput struct {

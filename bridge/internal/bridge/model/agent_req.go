@@ -1,4 +1,4 @@
-package models
+package model
 
 // AgentReq is the POST /agents request body.
 type AgentReq struct {

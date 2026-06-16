@@ -1,4 +1,4 @@
-package models
+package model
 
 // SessionInfo is one entry in the GET /sessions response.
 type SessionInfo struct {

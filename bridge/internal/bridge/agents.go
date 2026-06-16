@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cyberb/claude-voice/bridge/internal/bridge/models"
+	"github.com/cyberb/claude-voice/bridge/internal/bridge/model"
 )
 
 type agent struct {
@@ -75,7 +75,7 @@ func (a *Agents) lookup(id int) (dir, session string, ok bool) {
 }
 
 // List returns every agent with current git/exists status, ordered by id.
-func (a *Agents) List() []models.AgentInfo {
+func (a *Agents) List() []model.AgentInfo {
 	a.mu.Lock()
 	dirs := map[int]string{}
 	ids := make([]int, 0, len(a.m))
@@ -85,7 +85,7 @@ func (a *Agents) List() []models.AgentInfo {
 	}
 	a.mu.Unlock()
 	sort.Ints(ids)
-	out := []models.AgentInfo{}
+	out := []model.AgentInfo{}
 	for _, id := range ids {
 		dir := dirs[id]
 		branch, dirty := a.git.Info(dir)
@@ -98,7 +98,7 @@ func (a *Agents) List() []models.AgentInfo {
 		if name == "" || name == string(filepath.Separator) {
 			name = dir
 		}
-		out = append(out, models.AgentInfo{ID: id, Dir: dir, Name: name, Branch: bp, Dirty: dirty, Exists: a.fs.Exists(dir)})
+		out = append(out, model.AgentInfo{ID: id, Dir: dir, Name: name, Branch: bp, Dirty: dirty, Exists: a.fs.Exists(dir)})
 	}
 	return out
 }

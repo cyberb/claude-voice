@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cyberb/claude-voice/bridge/internal/bridge/models"
+	"github.com/cyberb/claude-voice/bridge/internal/bridge/model"
 )
 
 var working = []string{
@@ -48,7 +48,7 @@ func (c *Claude) Session(dir, resume, text string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	var res models.ClaudeResult
+	var res model.ClaudeResult
 	if json.Unmarshal(out, &res) != nil {
 		return strings.TrimSpace(string(out)), "", nil
 	}
@@ -79,7 +79,7 @@ func (c *Claude) Compact(id int) (string, bool) {
 // Chat runs a claude streaming turn and delivers each typed event to emit. It
 // blocks until the turn completes and persists the resulting session id. emit
 // must be safe to call from this goroutine only.
-func (c *Claude) Chat(p models.ChatReq, emit func(models.Event)) {
+func (c *Claude) Chat(p model.ChatReq, emit func(model.Event)) {
 	id := 0
 	if p.Agent != nil {
 		id = *p.Agent
@@ -88,7 +88,7 @@ func (c *Claude) Chat(p models.ChatReq, emit func(models.Event)) {
 	}
 	dir, resume, ok := c.agents.lookup(id)
 	if !ok || strings.TrimSpace(p.Text) == "" {
-		emit(models.Event{T: "reply", Text: "Unknown agent."})
+		emit(model.Event{T: "reply", Text: "Unknown agent."})
 		return
 	}
 
@@ -113,7 +113,7 @@ func (c *Claude) Chat(p models.ChatReq, emit func(models.Event)) {
 	cmd.Dir = dir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil || cmd.Start() != nil {
-		emit(models.Event{T: "reply", Text: "Failed to start agent."})
+		emit(model.Event{T: "reply", Text: "Failed to start agent."})
 		return
 	}
 	sc := bufio.NewScanner(stdout)
@@ -141,7 +141,7 @@ func (c *Claude) Chat(p models.ChatReq, emit func(models.Event)) {
 				scanning = false
 				break
 			}
-			var ev models.StreamEvent
+			var ev model.StreamEvent
 			if json.Unmarshal(line, &ev) != nil {
 				continue
 			}
@@ -155,7 +155,7 @@ func (c *Claude) Chat(p models.ChatReq, emit func(models.Event)) {
 				}
 				if name != "" {
 					sentModel = true
-					emit(models.Event{T: "model", Name: name})
+					emit(model.Event{T: "model", Name: name})
 				}
 			}
 			for _, e := range transformEvent(ev) {
@@ -165,15 +165,15 @@ func (c *Claude) Chat(p models.ChatReq, emit func(models.Event)) {
 				emit(e)
 			}
 		case <-heartbeat.C:
-			emit(models.Event{T: "working", Text: working[hbn%len(working)]})
+			emit(model.Event{T: "working", Text: working[hbn%len(working)]})
 			hbn++
 		}
 	}
 	cmd.Wait()
 	if ctx.Err() == context.DeadlineExceeded {
-		emit(models.Event{T: "reply", Text: fmt.Sprintf("The agent took longer than %d seconds, so I stopped it. Try a smaller step.", c.cfg.Timeout)})
+		emit(model.Event{T: "reply", Text: fmt.Sprintf("The agent took longer than %d seconds, so I stopped it. Try a smaller step.", c.cfg.Timeout)})
 	} else if !sawReply {
-		emit(models.Event{T: "reply", Text: "No response."})
+		emit(model.Event{T: "reply", Text: "No response."})
 	}
 	if newSession != "" {
 		c.agents.SetSession(id, newSession)

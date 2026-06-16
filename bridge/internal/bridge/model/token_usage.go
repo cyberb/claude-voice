@@ -1,4 +1,4 @@
-package models
+package model
 
 // TokenUsage is the token accounting attached to claude stream events.
 type TokenUsage struct {

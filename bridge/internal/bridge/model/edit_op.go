@@ -1,4 +1,4 @@
-package models
+package model
 
 // EditOp is one old/new replacement within a MultiEdit tool call.
 type EditOp struct {

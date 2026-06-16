@@ -1,4 +1,4 @@
-package models
+package model
 
 // ChatReq is the POST /chat request body.
 type ChatReq struct {

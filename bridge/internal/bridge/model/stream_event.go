@@ -1,4 +1,4 @@
-package models
+package model
 
 // StreamEvent models the claude CLI stream-json lines and the session .jsonl
 // log entries we read back.

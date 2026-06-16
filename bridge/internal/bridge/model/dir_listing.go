@@ -1,4 +1,4 @@
-package models
+package model
 
 // DirListing is the GET /ls response.
 type DirListing struct {

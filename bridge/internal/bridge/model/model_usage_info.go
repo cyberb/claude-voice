@@ -1,4 +1,4 @@
-package models
+package model
 
 // ModelUsageInfo carries per-model usage details from the result event.
 type ModelUsageInfo struct {

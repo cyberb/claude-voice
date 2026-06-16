@@ -1,4 +1,4 @@
-package models
+package model
 
 // TtsReq is the POST /tts request body.
 type TtsReq struct {

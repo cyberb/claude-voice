@@ -1,4 +1,4 @@
-package models
+package model
 
 // ContentBlock is one typed block of a structured message content array.
 type ContentBlock struct {

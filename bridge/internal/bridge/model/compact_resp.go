@@ -1,4 +1,4 @@
-package models
+package model
 
 // CompactResp is the POST /agents/<id>/compact response.
 type CompactResp struct {

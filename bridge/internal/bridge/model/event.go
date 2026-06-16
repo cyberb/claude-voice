@@ -1,4 +1,4 @@
-package models
+package model
 
 // Event is a single typed message the bridge streams to the app (NDJSON over
 // /chat, and the JSON array returned by /history). Empty fields are omitted.
