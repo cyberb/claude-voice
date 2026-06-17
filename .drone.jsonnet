@@ -8,6 +8,20 @@ local build() = {
     },
     steps: [
         {
+            name: "bridge test",
+            image: "golang:1.23-bookworm",
+            commands: [
+                "./bridge/test.sh"
+            ]
+        },
+        {
+            name: "android test",
+            image: "runmymind/docker-android-sdk:ubuntu-standalone-20240812",
+            commands: [
+                "./android/test.sh"
+            ]
+        },
+        {
             name: "bridge",
             image: "golang:1.23-bookworm",
             commands: [

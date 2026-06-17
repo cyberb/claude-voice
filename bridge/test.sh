@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run the Go bridge unit tests (vet + test). No SDK or device needed.
+set -eu
+cd "$(dirname "$0")"
+go vet ./...
+go test ./...

@@ -6,7 +6,7 @@ set -eu
 cd "$(dirname "$0")"
 yes | sdkmanager --licenses > /dev/null 2>&1 || true
 sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
-./gradlew clean test assemble bundleRelease
+./gradlew clean assemble bundleRelease
 cp app/build/outputs/apk/release/*.apk ../
 cp app/build/outputs/bundle/release/*.aab ../claude-voice-release.aab
 echo "built $(ls app/build/outputs/apk/release/*.apk) and ../claude-voice-release.aab"

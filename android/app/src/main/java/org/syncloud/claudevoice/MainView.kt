@@ -137,8 +137,7 @@ class MainView(private val host: VoiceHost, root: View) {
         return MODELS.firstOrNull { it.value == v }?.label ?: v.ifBlank { "default" }
     }
 
-    private fun fmtModel(raw: String): String =
-        Regex("-\\d{8}$").replace(raw.removePrefix("claude-"), "")
+    private fun fmtModel(raw: String): String = Format.model(raw)
 
     fun onServiceEvent(type: String, text: String) {
         when (type) {

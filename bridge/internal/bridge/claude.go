@@ -33,6 +33,12 @@ func NewClaude(cfg Config, agents *Agents) *Claude {
 	return &Claude{cfg: cfg, agents: agents}
 }
 
+// shouldCompact reports whether a turn's input token count has reached atPct
+// percent of the model context window. atPct of 0 disables auto-compaction.
+func shouldCompact(inTok, maxCtx, atPct int) bool {
+	return atPct > 0 && maxCtx > 0 && inTok*100 >= atPct*maxCtx
+}
+
 // Session runs a one-shot `claude -p` turn and returns (result, sessionID).
 func (c *Claude) Session(dir, resume, text string) (string, string, error) {
 	args := []string{"-p", "--output-format", "json"}
@@ -182,7 +188,7 @@ func (c *Claude) Chat(p model.ChatReq, emit func(model.Event)) {
 	if newSession != "" {
 		c.agents.SetSession(id, newSession)
 	}
-	if c.cfg.CompactAt > 0 && lastMax > 0 && lastIn*100 >= c.cfg.CompactAt*lastMax {
+	if shouldCompact(lastIn, lastMax, c.cfg.CompactAt) {
 		emit(model.Event{T: "working", Text: "Context is getting large — compacting to keep things fast."})
 		if _, ok := c.Compact(id); ok {
 			emit(model.Event{T: "usage", In: intp(0), Out: intp(0), Max: intp(lastMax)})

@@ -72,7 +72,7 @@ class TextFormat(private val ctx: Context) {
         return out
     }
 
-    fun fmtTok(n: Int) = if (n >= 1000) "${n / 1000}k" else "$n"
+    fun fmtTok(n: Int) = Format.tok(n)
 
     private fun stripInline(t: String): String {
         var s = t
